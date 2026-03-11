@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.10"
+APP_VERSION = "32.11"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -573,9 +573,9 @@ class CoupangAPI:
             "vendorItems": vendor_item_ids
         }
         
-        print(f"[상품 추가] couponId={coupon_id}, data={data}")
+        print(f"[ADD_ITEMS] couponId={coupon_id}, vendorItems={vendor_item_ids}")
         result = self._request("POST", path, data=data)
-        print(f"[상품 추가] 결과: {result}")
+        print(f"[ADD_ITEMS] response: {result}")
         
         # 비동기 상태 확인 - requestedId가 있으면 폴링
         if result.get('success'):
@@ -591,16 +591,19 @@ class CoupangAPI:
                         requested_id = content.get('requestedId')
             
             if requested_id:
-                print(f"[ITEMS] requestedId: {requested_id}, checking...")
+                result['requested_id'] = requested_id
+                print(f"[ADD_ITEMS] requestedId: {requested_id}, polling status...")
                 
-                # Wait max 3 seconds (1s x 3 attempts)
-                for i in range(3):
-                    time_module.sleep(1)
+                # Wait max 10 seconds (2s x 5 attempts)
+                for i in range(5):
+                    time_module.sleep(2)
                     status_result = self.get_item_add_status(coupon_id, requested_id)
                     
                     if status_result.get('success'):
                         status_data = status_result.get('data', {})
                         status = None
+                        failed_items = []
+                        succeeded = 0
                         
                         if isinstance(status_data, dict):
                             inner_data = status_data.get('data', {})
@@ -608,27 +611,36 @@ class CoupangAPI:
                                 content = inner_data.get('content', inner_data)
                                 if isinstance(content, dict):
                                     status = content.get('status')
+                                    failed_items = content.get('failedVendorItems', [])
+                                    succeeded = content.get('succeeded', 0)
                                 else:
                                     status = inner_data.get('status')
                         
-                        print(f"[ITEMS] Attempt {i+1}: status={status}")
+                        print(f"[ADD_ITEMS] Poll {i+1}/5: status={status}, succeeded={succeeded}, failed={len(failed_items)}")
                         
                         if status in ['COMPLETED', 'DONE']:
                             result['item_add_confirmed'] = True
-                            print(f"[ITEMS] OK: Items added!")
+                            result['succeeded_count'] = succeeded
+                            print(f"[ADD_ITEMS] SUCCESS! {succeeded} items added")
                             break
                         elif status in ['FAILED', 'FAIL']:
                             result['item_add_failed'] = True
-                            print(f"[ITEMS] FAILED: Items not added")
+                            result['failed_items'] = failed_items
+                            print(f"[ADD_ITEMS] FAILED! Failed items: {failed_items}")
                             break
+                    else:
+                        print(f"[ADD_ITEMS] Poll {i+1}/5: status check failed: {status_result}")
+            else:
+                print(f"[ADD_ITEMS] No requestedId in response")
         
         return result
     
     def get_item_add_status(self, coupon_id, request_id):
-        """상품 추가 요청 상태 확인"""
-        path = f"/v2/providers/fms/apis/api/v1/vendors/{self.vendor_id}/coupons/{coupon_id}/items/requested/{request_id}"
+        """상품 추가 요청 상태 확인 - 공통 요청상태 확인 API 사용"""
+        # 올바른 경로: /v2/providers/fms/apis/api/v1/vendors/{vendorId}/requested/{requestedId}
+        path = f"/v2/providers/fms/apis/api/v1/vendors/{self.vendor_id}/requested/{request_id}"
         result = self._request("GET", path)
-        print(f"[상품추가상태] requestedId={request_id}, 결과: {result}")
+        print(f"[ITEM_STATUS] requestedId={request_id}, result: {result}")
         return result
     
     def cancel_coupon(self, coupon_id):
@@ -2019,6 +2031,28 @@ def debug_add_items(coupon_id, vendor_item_id):
             "result": result
         })
     except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/debug/check-request/<request_id>', methods=['GET'])
+def debug_check_request(request_id):
+    """디버그용 - 요청상태 확인 API"""
+    try:
+        config = load_config()
+        api = CoupangAPI(config)
+        
+        result = api.get_coupon_request_status(request_id)
+        return jsonify({
+            "success": True,
+            "request_id": request_id,
+            "result": result
+        })
+    except Exception as e:
+        import traceback
         return jsonify({
             "success": False,
             "error": str(e),

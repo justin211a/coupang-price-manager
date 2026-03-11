@@ -49,6 +49,19 @@ except ImportError:
     HAS_SCHEDULER = False
     print("⚠️ apscheduler 미설치. 자동 체크 알림 기능 비활성화")
 
+# Google Cloud Storage for config persistence
+try:
+    from google.cloud import storage
+    HAS_GCS = True
+except ImportError:
+    HAS_GCS = False
+    print("⚠️ google-cloud-storage 미설치. 로컬 파일 저장 사용")
+
+# GCS 설정
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET', 'coupang-price-manager-config')
+GCS_CONFIG_PATH = 'config.json'
+GCS_HISTORY_PATH = 'price_history.json'
+
 # 한국 시간대 (UTC+9)
 KST = timezone(timedelta(hours=9))
 
@@ -144,17 +157,64 @@ def log_action(action_type, message, data=None):
 
 
 def load_config():
-    """설정 파일 로드"""
-    if not os.path.exists(CONFIG_FILE):
-        return None
-    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    """설정 파일 로드 (GCS 우선, 없으면 로컬)"""
+    config = None
+    
+    # 1. GCS에서 먼저 시도
+    if HAS_GCS:
+        try:
+            client = storage.Client()
+            bucket = client.bucket(GCS_BUCKET_NAME)
+            blob = bucket.blob(GCS_CONFIG_PATH)
+            
+            if blob.exists():
+                content = blob.download_as_text()
+                config = json.loads(content)
+                print(f"[Config] GCS에서 로드: gs://{GCS_BUCKET_NAME}/{GCS_CONFIG_PATH}")
+        except Exception as e:
+            print(f"[Config] GCS 로드 실패: {e}")
+    
+    # 2. GCS에 없으면 로컬 파일
+    if config is None and os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            print(f"[Config] 로컬 파일에서 로드: {CONFIG_FILE}")
+            
+            # 로컬에만 있으면 GCS에 업로드
+            if HAS_GCS:
+                try:
+                    save_to_gcs(config, GCS_CONFIG_PATH)
+                    print(f"[Config] GCS에 초기 업로드 완료")
+                except Exception as e:
+                    print(f"[Config] GCS 초기 업로드 실패: {e}")
+    
+    return config
 
 
 def save_config(config):
-    """설정 파일 저장"""
+    """설정 파일 저장 (GCS + 로컬 둘 다)"""
+    # 1. 로컬 저장 (백업)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    
+    # 2. GCS 저장 (메인)
+    if HAS_GCS:
+        try:
+            save_to_gcs(config, GCS_CONFIG_PATH)
+            print(f"[Config] GCS 저장 완료: gs://{GCS_BUCKET_NAME}/{GCS_CONFIG_PATH}")
+        except Exception as e:
+            print(f"[Config] GCS 저장 실패 (로컬은 저장됨): {e}")
+
+
+def save_to_gcs(data, path):
+    """GCS에 JSON 데이터 저장"""
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET_NAME)
+    blob = bucket.blob(path)
+    blob.upload_from_string(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        content_type='application/json'
+    )
 
 
 # ==================== 가격 이력 관리 ====================

@@ -78,26 +78,26 @@
         "1bottle": {
           "name": "1개입",
           "vendor_item_id": 92628641615,
-          "original_price": 45500,
+          "original_price": 55000,
           "current_price": 43900,
           "min_price": 20000,
-          "max_price": 50000
+          "max_price": 54000
         },
         "3bottle": {
           "name": "3개입",
           "vendor_item_id": 92628641625,
-          "original_price": 131700,
+          "original_price": 165000,
           "current_price": 116900,
           "min_price": 50000,
-          "max_price": 140000
+          "max_price": 164000
         },
         "6bottle": {
           "name": "6개입",
           "vendor_item_id": 92628641605,
-          "original_price": 263400,
+          "original_price": 330000,
           "current_price": 222500,
           "min_price": 100000,
-          "max_price": 280000
+          "max_price": 329000
         }
       },
       "competitors": [],

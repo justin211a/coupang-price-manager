@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.8"
+APP_VERSION = "32.9"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -311,8 +311,10 @@ class CoupangAPI:
         self.base_url = config['api']['base_url']
     
     def _generate_hmac(self, method, path, query=""):
-        """HMAC 서명 생성"""
-        datetime_str = time_module.strftime('%y%m%d') + 'T' + time_module.strftime('%H%M%S') + 'Z'
+        """HMAC 서명 생성 - GMT 시간 사용"""
+        from datetime import datetime, timezone
+        now_gmt = datetime.now(timezone.utc)
+        datetime_str = now_gmt.strftime('%y%m%d') + 'T' + now_gmt.strftime('%H%M%S') + 'Z'
         message = datetime_str + method + path + query
         
         signature = hmac.new(

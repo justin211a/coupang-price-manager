@@ -216,10 +216,13 @@ function renderCompetitors(comps) {
             </div>
             <input type="text" value="${c.url || ''}" readonly class="w-full bg-gray-700 rounded px-2 py-1 text-xs text-gray-300 mb-2">
             <div class="flex justify-between items-center">
-                <span class="text-green-400 font-bold text-lg">${c.last_price ? fmt(c.last_price) + '원' : '가격 미입력'}</span>
-                <div class="flex gap-2 items-center">
+                <div class="flex items-center gap-2">
+                    <span class="text-green-400 font-bold text-lg">${c.last_price ? fmt(c.last_price) + '원' : '-'}</span>
                     <span class="text-xs text-gray-500">${c.last_checked ? c.last_checked.split(' ')[1] || '' : ''}</span>
-                    <button onclick="manualPrice('${c.id}')" class="text-xs bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded font-medium">✏️ 가격 입력</button>
+                </div>
+                <div class="flex items-center gap-1">
+                    <input type="number" id="price-input-${c.id}" placeholder="가격" class="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:border-purple-500 focus:outline-none" onkeypress="if(event.key==='Enter') saveCompPrice('${c.id}')">
+                    <button onclick="saveCompPrice('${c.id}')" class="text-xs bg-purple-600 hover:bg-purple-500 px-2 py-1 rounded font-medium">저장</button>
                 </div>
             </div>
         </div>
@@ -411,12 +414,17 @@ async function crawlComp() {
     }
 }
 
-async function manualPrice(id) {
-    const price = prompt('경쟁사 가격:');
-    if (!price) return;
+async function saveCompPrice(id) {
+    const input = document.getElementById(`price-input-${id}`);
+    const price = input.value;
+    if (!price || isNaN(price)) {
+        log('⚠️ 가격을 입력하세요');
+        return;
+    }
     await api(`/api/product-groups/${activeGroupKey}/competitors/${id}/price`, 'POST', { price: parseInt(price) });
+    input.value = '';
     await loadConfig();
-    log(`✏️ 수동 입력: ${fmt(parseInt(price))}원`);
+    log(`✅ 경쟁사 가격 저장: ${fmt(parseInt(price))}원`);
 }
 
 async function syncPrices() {

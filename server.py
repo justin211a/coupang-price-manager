@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.5"
+APP_VERSION = "32.6"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -1812,7 +1812,7 @@ def apply_group_prices(group_key):
     if cancelled_coupons:
         print(f"[쿠폰 파기] 총 {len(cancelled_coupons)}개 파기 완료")
         # 파기 후 1분 대기 (쿠팡 API 제한)
-        time_module.sleep(60)
+        time.sleep(60)
     
     # ==================== 새 쿠폰 발행 ====================
     results = []

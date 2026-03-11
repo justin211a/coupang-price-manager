@@ -62,6 +62,10 @@ GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET', 'coupang-price-manager-config')
 GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
+# 버전 정보
+APP_VERSION = "32.4"
+BUILD_DATE = "2026-03-12"
+
 # 한국 시간대 (UTC+9)
 KST = timezone(timedelta(hours=9))
 
@@ -1121,8 +1125,22 @@ def get_config():
     """설정 조회"""
     config = load_config()
     if not config:
-        return jsonify({"error": "설정 파일이 없습니다"}), 404
+        return jsonify({"error": "Config not found"}), 404
+    # 버전 정보 추가
+    config['_version'] = APP_VERSION
+    config['_build_date'] = BUILD_DATE
     return jsonify(config)
+
+
+@app.route('/api/version', methods=['GET'])
+def get_version():
+    """버전 정보 조회"""
+    return jsonify({
+        "version": APP_VERSION,
+        "build_date": BUILD_DATE,
+        "gcs_enabled": HAS_GCS,
+        "gcs_bucket": GCS_BUCKET_NAME if HAS_GCS else None
+    })
 
 
 @app.route('/api/config/download', methods=['GET'])

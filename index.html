@@ -24,10 +24,11 @@
         <p class="text-gray-400 text-sm">제품 그룹별 자동 가격 관리 (즉시할인쿠폰)</p>
     </div>
     <div class="flex gap-2 items-center flex-wrap">
-        <span id="api-status" class="flex items-center gap-1 text-xs"><span class="w-2 h-2 bg-yellow-500 rounded-full pulse"></span> 연결 확인 중...</span>
+        <span id="app-version" class="text-xs text-gray-500">v--</span>
+        <span id="api-status" class="flex items-center gap-1 text-xs"><span class="w-2 h-2 bg-yellow-500 rounded-full pulse"></span> Connecting...</span>
         <button onclick="testApi()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🧪 API</button>
-        <button onclick="testJandi()" class="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm">📢 잔디</button>
-        <button onclick="downloadConfig()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm">💾 백업</button>
+        <button onclick="testJandi()" class="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm">📢 Jandi</button>
+        <button onclick="downloadConfig()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm">💾 Backup</button>
         <button onclick="loadConfig()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🔄</button>
     </div>
 </header>
@@ -113,15 +114,20 @@ async function api(endpoint, method = 'GET', body = null) {
 async function loadConfig() {
     try {
         config = await api('/api/config');
-        if (config.error) { log('❌ ' + config.error); return; }
+        if (config.error) { log('ERROR: ' + config.error); return; }
         activeGroupKey = config.active_group || Object.keys(config.product_groups || {})[0] || '';
         renderAll();
-        log('✅ 설정 로드 완료');
-        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-green-500 rounded-full"></span> API 연결됨';
+        
+        // Show version
+        const ver = config._version || '?';
+        document.getElementById('app-version').textContent = 'v' + ver;
+        
+        log('OK: Config loaded (v' + ver + ')');
+        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-green-500 rounded-full"></span> Connected';
         document.getElementById('api-status').className = 'flex items-center gap-1 text-xs text-green-400';
     } catch (e) {
-        log('❌ 설정 로드 실패: ' + e.message);
-        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-red-500 rounded-full"></span> 연결 실패';
+        log('ERROR: Load failed - ' + e.message);
+        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-red-500 rounded-full"></span> Disconnected';
         document.getElementById('api-status').className = 'flex items-center gap-1 text-xs text-red-400';
     }
 }

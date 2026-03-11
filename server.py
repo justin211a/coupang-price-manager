@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.4"
+APP_VERSION = "32.5"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -1867,28 +1867,47 @@ def apply_group_prices(group_key):
             continue
         
         # 쿠폰 발행
-        coupon_result = api.create_instant_coupon(
-            vendor_item_ids=[vendor_item_id],
-            discount_amount=discount_amount,
-            contract_id=contract_id,
-            hours=discount_hours,
-            title=f"{coupon_name} {discount_amount:,}원"
-        )
+        print(f"[COUPON] Creating: {product_key}, discount={discount_amount}, vendor_item_id={vendor_item_id}")
         
-        if coupon_result.get('success'):
-            products[product_key]['current_price'] = target_price
-            results.append({
-                "product": product.get('name', product_key),
-                "vendor_item_id": vendor_item_id,
-                "target_price": target_price,
-                "discount_amount": discount_amount,
-                "success": True
-            })
-        else:
+        try:
+            coupon_result = api.create_instant_coupon(
+                vendor_item_ids=[vendor_item_id],
+                discount_amount=discount_amount,
+                contract_id=contract_id,
+                hours=discount_hours,
+                title=f"{coupon_name} {discount_amount:,}원"
+            )
+            
+            print(f"[COUPON] Result for {product_key}: {coupon_result}")
+            
+            if coupon_result.get('success'):
+                coupon_id = coupon_result.get('coupon_id')
+                items_added = coupon_result.get('items_added', False)
+                
+                products[product_key]['current_price'] = target_price
+                results.append({
+                    "product": product.get('name', product_key),
+                    "vendor_item_id": vendor_item_id,
+                    "target_price": target_price,
+                    "discount_amount": discount_amount,
+                    "coupon_id": coupon_id,
+                    "items_added": items_added,
+                    "success": True
+                })
+            else:
+                error_msg = coupon_result.get('error', 'Unknown error')
+                error_detail = coupon_result.get('error_detail', '')
+                results.append({
+                    "product": product.get('name', product_key),
+                    "success": False,
+                    "error": f"{error_msg} {error_detail}".strip()
+                })
+        except Exception as e:
+            print(f"[COUPON] Exception for {product_key}: {str(e)}")
             results.append({
                 "product": product.get('name', product_key),
                 "success": False,
-                "error": coupon_result.get('error', '쿠폰 발행 실패')
+                "error": f"Exception: {str(e)}"
             })
     
     save_config(config)

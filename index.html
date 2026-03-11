@@ -532,21 +532,26 @@ async function applyAllPrices() {
         res.results.forEach(r => {
             if (r.success) {
                 successCount++;
-                msg += `✅ ${r.product}: ${fmt(r.target_price)} (${fmt(r.discount_amount)} OFF)\n`;
-                log(`✅ ${r.product}: ${fmt(r.target_price)}원`);
+                const itemStatus = r.items_added ? '✅' : '⚠️ NO ITEMS';
+                msg += `✅ ${r.product}: ${fmt(r.target_price)} (${fmt(r.discount_amount)} OFF) ${itemStatus}\n`;
+                if (r.coupon_id) msg += `   Coupon ID: ${r.coupon_id}\n`;
+                log(`✅ ${r.product}: ${fmt(r.target_price)}`);
             } else {
                 failCount++;
                 msg += `❌ ${r.product}: ${r.error}\n`;
-                log(`❌ ${r.product}: ${r.error}`);
+                log(`ERROR: ${r.product}: ${r.error}`);
             }
         });
     }
     
     msg += `\n======================\n`;
     msg += `SUCCESS: ${successCount} / FAIL: ${failCount}\n`;
+    if (successCount > 0 && res.results.some(r => r.success && !r.items_added)) {
+        msg += `\n⚠️ WARNING: Some coupons have no items attached!\n`;
+    }
     msg += `\nCoupang may take up to 30 min to apply.`;
     
-    log(`✅ 완료: ${successCount}개 성공, ${failCount}개 실패`);
+    log(`Done: ${successCount} success, ${failCount} fail`);
     alert(msg);
 }
 

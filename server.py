@@ -1530,30 +1530,36 @@ def save_competitors_bulk(group_key):
     """경쟁사 일괄 저장 (전체 교체)"""
     config = load_config()
     if not config:
-        return jsonify({"error": "설정 파일이 없습니다"}), 404
+        return jsonify({"error": "Config not found"}), 404
     
     groups = config.get('product_groups', {})
     if group_key not in groups:
-        return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
+        return jsonify({"error": f"Group not found: {group_key}"}), 404
     
     data = request.get_json() or {}
     competitors_data = data.get('competitors', [])
+    
+    print(f"[BULK SAVE] group={group_key}, input={competitors_data}")
     
     # 새 경쟁사 목록 생성
     new_competitors = []
     for i, comp in enumerate(competitors_data[:3]):  # 최대 3개
         url = comp.get('url', '').strip()
-        if not url:
+        price = comp.get('last_price')
+        name = comp.get('name', '').strip()
+        
+        # URL이나 가격 중 하나라도 있으면 저장
+        if not url and not price:
             continue
             
         comp_id = f"comp_{i + 1}_{int(time.time())}"
         new_comp = {
             "id": comp_id,
             "order": comp.get('order', i + 1),
-            "name": comp.get('name', f'경쟁사 {i + 1}'),
+            "name": name or f"Competitor {i + 1}",
             "url": url,
-            "last_price": comp.get('last_price'),
-            "last_checked": format_kst_datetime() if comp.get('last_price') else ""
+            "last_price": price,
+            "last_checked": format_kst_datetime() if price else ""
         }
         new_competitors.append(new_comp)
     
@@ -1563,7 +1569,8 @@ def save_competitors_bulk(group_key):
     groups[group_key]['competitors'] = new_competitors
     save_config(config)
     
-    log_action("COMPETITOR_BULK_SAVE", f"경쟁사 일괄 저장: {len(new_competitors)}개 ({group_key})")
+    print(f"[BULK SAVE] saved={new_competitors}")
+    log_action("COMPETITOR_BULK_SAVE", f"Competitors saved: {len(new_competitors)} ({group_key})")
     
     return jsonify({
         "success": True,

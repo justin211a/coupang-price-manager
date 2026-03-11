@@ -447,26 +447,45 @@ async function saveAllCompetitors() {
         const priceVal = document.getElementById(`comp-price-${i}`)?.value;
         const price = priceVal ? parseInt(priceVal) : null;
         
-        // URL이 있으면 경쟁사로 등록 (이름 없으면 기본값)
-        if (url) {
+        // URL or price exists
+        if (url || price) {
             competitors.push({
                 order: i + 1,
-                name: name || `경쟁사 ${i + 1}`,
-                url: url,
+                name: name || `Competitor ${i + 1}`,
+                url: url || '',
                 last_price: price
             });
         }
     }
     
-    log('💾 경쟁사 정보 저장 중...');
+    log('Saving competitors...');
     const res = await api(`/api/product-groups/${activeGroupKey}/competitors/bulk`, 'POST', { competitors });
     if (res.error) {
-        log('❌ ' + res.error);
-        alert('저장 실패: ' + res.error);
+        log('ERROR: ' + res.error);
+        alert('SAVE FAILED: ' + res.error);
         return;
     }
+    
+    // Reload and verify
     await loadConfig();
-    log(`✅ 경쟁사 ${competitors.length}개 저장 완료`);
+    
+    const savedComps = config.product_groups[activeGroupKey]?.competitors || [];
+    const savedCount = savedComps.length;
+    const savedPrice = savedComps[0]?.last_price;
+    
+    let msg = '=== SAVE RESULT ===\n\n';
+    msg += `Saved: ${savedCount} competitor(s)\n`;
+    if (savedPrice) {
+        msg += `Price: ${fmt(savedPrice)}\n`;
+    }
+    savedComps.forEach((c, i) => {
+        msg += `\n#${i+1}: ${c.name || 'No name'}`;
+        if (c.last_price) msg += ` - ${fmt(c.last_price)}`;
+    });
+    msg += '\n\n===================';
+    
+    log(`OK: ${savedCount} competitors saved`);
+    alert(msg);
 }
 
 async function syncPrices() {

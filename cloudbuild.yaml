@@ -1,0 +1,19 @@
+# GitHub push시 자동 배포 설정
+steps:
+  # Cloud Run에 배포
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'coupang-price-manager'
+      - '--source=.'
+      - '--region=asia-northeast3'
+      - '--allow-unauthenticated'
+      - '--memory=512Mi'
+      - '--timeout=300'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: '600s'

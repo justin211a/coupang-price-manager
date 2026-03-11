@@ -491,7 +491,7 @@ class CoupangAPI:
         return result
     
     def add_coupon_items(self, coupon_id, vendor_item_ids):
-        """기존 쿠폰에 상품 추가 (v1 API)"""
+        """기존 쿠폰에 상품 추가 (v1 API) - 비동기 상태 확인 포함"""
         # v1 엔드포인트: POST /coupons/{couponId}/items
         path = f"/v2/providers/fms/apis/api/v1/vendors/{self.vendor_id}/coupons/{coupon_id}/items"
         
@@ -500,14 +500,66 @@ class CoupangAPI:
         else:
             vendor_item_ids = [int(vid) for vid in vendor_item_ids]
         
-        # 여러 가지 형식 시도
         data = {
-            "vendorItems": vendor_item_ids  # vendorItemIds 대신 vendorItems
+            "vendorItems": vendor_item_ids
         }
         
         print(f"[상품 추가] couponId={coupon_id}, data={data}")
         result = self._request("POST", path, data=data)
         print(f"[상품 추가] 결과: {result}")
+        
+        # 비동기 상태 확인 - requestedId가 있으면 폴링
+        if result.get('success'):
+            response_data = result.get('data', {})
+            requested_id = None
+            
+            # requestedId 추출 (다양한 응답 구조 대응)
+            if isinstance(response_data, dict):
+                inner_data = response_data.get('data', {})
+                if isinstance(inner_data, dict):
+                    content = inner_data.get('content', inner_data)
+                    if isinstance(content, dict):
+                        requested_id = content.get('requestedId')
+            
+            if requested_id:
+                print(f"[상품 추가] requestedId: {requested_id}, 상태 확인 중...")
+                
+                # 최대 10초 대기 (2초 간격으로 5회 시도)
+                for i in range(5):
+                    time_module.sleep(2)
+                    status_result = self.get_item_add_status(coupon_id, requested_id)
+                    
+                    if status_result.get('success'):
+                        status_data = status_result.get('data', {})
+                        status = None
+                        
+                        if isinstance(status_data, dict):
+                            inner_data = status_data.get('data', {})
+                            if isinstance(inner_data, dict):
+                                content = inner_data.get('content', inner_data)
+                                if isinstance(content, dict):
+                                    status = content.get('status')
+                                else:
+                                    status = inner_data.get('status')
+                        
+                        print(f"[상품 추가] 시도 {i+1}: status={status}")
+                        
+                        if status in ['COMPLETED', 'DONE']:
+                            result['item_add_confirmed'] = True
+                            print(f"[상품 추가] ✅ 상품 연결 확인 완료!")
+                            break
+                        elif status in ['FAILED', 'FAIL']:
+                            result['item_add_failed'] = True
+                            print(f"[상품 추가] ❌ 상품 연결 실패")
+                            break
+        
+        return result
+    
+    def get_item_add_status(self, coupon_id, request_id):
+        """상품 추가 요청 상태 확인"""
+        path = f"/v2/providers/fms/apis/api/v1/vendors/{self.vendor_id}/coupons/{coupon_id}/items/requested/{request_id}"
+        result = self._request("GET", path)
+        print(f"[상품추가상태] requestedId={request_id}, 결과: {result}")
         return result
     
     def cancel_coupon(self, coupon_id):
@@ -1596,7 +1648,7 @@ def sync_group_prices(group_key):
 
 @app.route('/api/product-groups/<group_key>/apply-prices', methods=['POST'])
 def apply_group_prices(group_key):
-    """제품 그룹의 1+3+6병 전체 쿠폰 발행"""
+    """제품 그룹의 1+3+6병 전체 쿠폰 발행 (기존 쿠폰 파기 포함)"""
     config = load_config()
     if not config:
         return jsonify({"error": "설정 파일이 없습니다"}), 404
@@ -1608,22 +1660,76 @@ def apply_group_prices(group_key):
     group = groups[group_key]
     products = group.get('products', {})
     competitors = group.get('competitors', [])
+    group_name = group.get('name', '')
     
     # 경쟁사 가격 확인
     competitor_price = competitors[0].get('last_price', 0) if competitors else 0
     if not competitor_price:
-        return jsonify({"error": "경쟁사 가격이 없습니다. 먼저 경쟁사 가격을 크롤링하세요."}), 400
+        return jsonify({"error": "경쟁사 가격이 없습니다. 먼저 경쟁사 가격을 입력하세요."}), 400
     
     price_gap = group.get('price_gap', 1000)
     price_direction = group.get('price_direction', 'lower')
     discount_hours = group.get('discount_hours', 4)
     contract_id = config.get('global_settings', {}).get('contract_id') or config.get('coupon_settings', {}).get('contract_id')
-    coupon_name = group.get('coupon_name', f"{group.get('name', '')} 할인쿠폰")
+    coupon_name = group.get('coupon_name', f"{group_name} 할인쿠폰")
     
     if not contract_id:
         return jsonify({"error": "계약서 ID가 설정되지 않았습니다"}), 400
     
     api = CoupangAPI(config)
+    
+    # ==================== 기존 쿠폰 파기 ====================
+    # 고정 쿠폰 키워드 (파기하면 안 되는 것들)
+    fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+    
+    # 해당 제품 그룹 식별 키워드 (쿠폰명에서 검색)
+    group_keywords = [group_name]
+    if group_key == 'prime_nmn':
+        group_keywords.extend(['NMN', 'nmn', '프라임'])
+    elif group_key == 'resveratrol':
+        group_keywords.extend(['레스베라트롤', 'resveratrol'])
+    
+    cancelled_coupons = []
+    coupons_result = api.get_coupons("APPLIED")
+    
+    if coupons_result.get('success'):
+        coupon_data = coupons_result.get('data', {})
+        if isinstance(coupon_data, dict):
+            inner_data = coupon_data.get('data', {})
+            if isinstance(inner_data, dict):
+                coupon_list = inner_data.get('content', [])
+            else:
+                coupon_list = []
+        else:
+            coupon_list = []
+        
+        for coupon in coupon_list:
+            promo_name = coupon.get('promotionName', '')
+            coupon_id = coupon.get('couponId')
+            discount = coupon.get('discount', 0)
+            
+            # 고정 쿠폰은 제외
+            if any(kw in promo_name for kw in fixed_coupon_keywords):
+                continue
+            
+            # 해당 제품 그룹 쿠폰인지 확인
+            is_group_coupon = any(kw in promo_name for kw in group_keywords)
+            
+            if is_group_coupon and coupon_id:
+                print(f"[쿠폰 파기] 대상 발견: {promo_name} (ID: {coupon_id}, {int(discount):,}원)")
+                cancel_result = api.cancel_coupon(coupon_id)
+                if cancel_result.get('success'):
+                    cancelled_coupons.append(f"{promo_name} (ID: {coupon_id})")
+                    log_action("COUPON_CANCEL", f"기존 쿠폰 파기: {promo_name} ({group_key})")
+                else:
+                    log_action("COUPON_CANCEL_FAIL", f"쿠폰 파기 실패: {coupon_id}", cancel_result)
+    
+    if cancelled_coupons:
+        print(f"[쿠폰 파기] 총 {len(cancelled_coupons)}개 파기 완료")
+        # 파기 후 1분 대기 (쿠팡 API 제한)
+        time_module.sleep(60)
+    
+    # ==================== 새 쿠폰 발행 ====================
     results = []
     
     # 1병, 3병, 6병 순서
@@ -1713,8 +1819,10 @@ def apply_group_prices(group_key):
             f"• {r['product']}: {r.get('target_price', 0):,}원 ({r.get('discount_amount', 0):,}원 할인)"
             for r in results if r.get('success')
         ])
+        if cancelled_coupons:
+            body += f"\n\n🗑️ 기존 쿠폰 {len(cancelled_coupons)}개 파기됨"
         send_jandi_notification(
-            f"🎫 {group.get('name', '')} 쿠폰 발행",
+            f"🎫 {group_name} 쿠폰 발행",
             body,
             "green" if success_count == len(results) else "yellow"
         )
@@ -1722,6 +1830,7 @@ def apply_group_prices(group_key):
     return jsonify({
         "success": True,
         "results": results,
+        "cancelled_coupons": cancelled_coupons,
         "applied_at": format_kst_datetime()
     })
 

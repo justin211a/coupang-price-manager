@@ -1413,6 +1413,53 @@ def delete_competitor(group_key, comp_id):
     return jsonify({"success": True})
 
 
+@app.route('/api/product-groups/<group_key>/competitors/bulk', methods=['POST'])
+def save_competitors_bulk(group_key):
+    """경쟁사 일괄 저장 (전체 교체)"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    
+    groups = config.get('product_groups', {})
+    if group_key not in groups:
+        return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
+    
+    data = request.get_json() or {}
+    competitors_data = data.get('competitors', [])
+    
+    # 새 경쟁사 목록 생성
+    new_competitors = []
+    for i, comp in enumerate(competitors_data[:3]):  # 최대 3개
+        url = comp.get('url', '').strip()
+        if not url:
+            continue
+            
+        comp_id = f"comp_{i + 1}_{int(time.time())}"
+        new_comp = {
+            "id": comp_id,
+            "order": comp.get('order', i + 1),
+            "name": comp.get('name', f'경쟁사 {i + 1}'),
+            "url": url,
+            "last_price": comp.get('last_price'),
+            "last_checked": format_kst_datetime() if comp.get('last_price') else ""
+        }
+        new_competitors.append(new_comp)
+    
+    # 순서대로 정렬
+    new_competitors.sort(key=lambda x: x.get('order', 0))
+    
+    groups[group_key]['competitors'] = new_competitors
+    save_config(config)
+    
+    log_action("COMPETITOR_BULK_SAVE", f"경쟁사 일괄 저장: {len(new_competitors)}개 ({group_key})")
+    
+    return jsonify({
+        "success": True,
+        "count": len(new_competitors),
+        "competitors": new_competitors
+    })
+
+
 @app.route('/api/product-groups/<group_key>/crawl-competitors', methods=['POST'])
 def crawl_competitors(group_key):
     """경쟁사 가격 크롤링"""

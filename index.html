@@ -207,26 +207,38 @@ function renderGroupSettings() {
 }
 
 function renderCompetitors(comps) {
-    if (!comps.length) return '<div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center text-gray-500 text-sm">경쟁사 URL을 추가하세요</div>';
-    return comps.map(c => `
-        <div class="bg-gray-800 rounded-lg p-3">
-            <div class="flex justify-between items-start mb-2">
-                <input type="text" value="${c.name || ''}" onchange="updateCompName('${c.id}', this.value)" class="bg-transparent text-white font-medium border-b border-gray-600 outline-none w-32">
-                <button onclick="deleteComp('${c.id}')" class="text-red-400 hover:text-red-300 text-sm">✕</button>
+    // 최대 3개, 빈 슬롯도 표시
+    let html = '';
+    for (let i = 0; i < 3; i++) {
+        const c = comps[i] || null;
+        const num = i + 1;
+        html += `
+        <div class="bg-gray-800 rounded-lg p-4 ${c ? '' : 'border-2 border-dashed border-gray-600'}">
+            <div class="flex justify-between items-center mb-3">
+                <span class="text-sm font-bold text-purple-400">경쟁사 #${num}</span>
+                ${c ? `<button onclick="deleteComp('${c.id}')" class="text-red-400 hover:text-red-300 text-xs">✕ 삭제</button>` : ''}
             </div>
-            <input type="text" value="${c.url || ''}" readonly class="w-full bg-gray-700 rounded px-2 py-1 text-xs text-gray-300 mb-2">
-            <div class="flex justify-between items-center">
-                <div class="flex items-center gap-2">
-                    <span class="text-green-400 font-bold text-lg">${c.last_price ? fmt(c.last_price) + '원' : '-'}</span>
-                    <span class="text-xs text-gray-500">${c.last_checked ? c.last_checked.split(' ')[1] || '' : ''}</span>
+            <div class="space-y-2">
+                <div>
+                    <label class="text-xs text-gray-400">제품명</label>
+                    <input type="text" id="comp-name-${i}" value="${c?.name || ''}" placeholder="예: 로킷아메리카 NMN" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
                 </div>
-                <div class="flex items-center gap-1">
-                    <input type="number" id="price-input-${c.id}" placeholder="가격" class="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:border-purple-500 focus:outline-none" onkeypress="if(event.key==='Enter') saveCompPrice('${c.id}')">
-                    <button onclick="saveCompPrice('${c.id}')" class="text-xs bg-purple-600 hover:bg-purple-500 px-2 py-1 rounded font-medium">저장</button>
+                <div>
+                    <label class="text-xs text-gray-400">쿠팡 URL</label>
+                    <input type="text" id="comp-url-${i}" value="${c?.url || ''}" placeholder="https://www.coupang.com/vp/products/..." class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-400">현재 가격 (원)</label>
+                    <input type="number" id="comp-price-${i}" value="${c?.last_price || ''}" placeholder="예: 52720" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
                 </div>
             </div>
-        </div>
-    `).join('') + (comps.length < 3 ? `<div onclick="addCompetitor()" class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center text-gray-500 text-sm cursor-pointer hover:border-gray-500">+ 경쟁사 추가 (${comps.length}/3)</div>` : '');
+        </div>`;
+    }
+    html += `
+        <div class="col-span-full mt-2">
+            <button onclick="saveAllCompetitors()" class="w-full py-3 bg-purple-600 hover:bg-purple-500 rounded-lg font-bold text-white">💾 경쟁사 정보 저장</button>
+        </div>`;
+    return html;
 }
 
 function renderPriceSettings() {
@@ -425,6 +437,36 @@ async function saveCompPrice(id) {
     input.value = '';
     await loadConfig();
     log(`✅ 경쟁사 가격 저장: ${fmt(parseInt(price))}원`);
+}
+
+async function saveAllCompetitors() {
+    const competitors = [];
+    for (let i = 0; i < 3; i++) {
+        const name = document.getElementById(`comp-name-${i}`)?.value?.trim();
+        const url = document.getElementById(`comp-url-${i}`)?.value?.trim();
+        const priceVal = document.getElementById(`comp-price-${i}`)?.value;
+        const price = priceVal ? parseInt(priceVal) : null;
+        
+        // URL이 있으면 경쟁사로 등록 (이름 없으면 기본값)
+        if (url) {
+            competitors.push({
+                order: i + 1,
+                name: name || `경쟁사 ${i + 1}`,
+                url: url,
+                last_price: price
+            });
+        }
+    }
+    
+    log('💾 경쟁사 정보 저장 중...');
+    const res = await api(`/api/product-groups/${activeGroupKey}/competitors/bulk`, 'POST', { competitors });
+    if (res.error) {
+        log('❌ ' + res.error);
+        alert('저장 실패: ' + res.error);
+        return;
+    }
+    await loadConfig();
+    log(`✅ 경쟁사 ${competitors.length}개 저장 완료`);
 }
 
 async function syncPrices() {

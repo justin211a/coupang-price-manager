@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.7"
+APP_VERSION = "32.8"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -312,7 +312,7 @@ class CoupangAPI:
     
     def _generate_hmac(self, method, path, query=""):
         """HMAC 서명 생성"""
-        datetime_str = time.strftime('%y%m%d') + 'T' + time.strftime('%H%M%S') + 'Z'
+        datetime_str = time_module.strftime('%y%m%d') + 'T' + time_module.strftime('%H%M%S') + 'Z'
         message = datetime_str + method + path + query
         
         signature = hmac.new(
@@ -1492,7 +1492,7 @@ def add_competitor(group_key):
         vendor_item_id = vid_match.group(1)
     
     # 고유 ID 생성
-    comp_id = f"comp_{len(competitors) + 1}_{int(time.time())}"
+    comp_id = f"comp_{len(competitors) + 1}_{int(time_module.time())}"
     
     new_competitor = {
         "id": comp_id,
@@ -1567,7 +1567,7 @@ def save_competitors_bulk(group_key):
         if not url and not price:
             continue
             
-        comp_id = f"comp_{i + 1}_{int(time.time())}"
+        comp_id = f"comp_{i + 1}_{int(time_module.time())}"
         new_comp = {
             "id": comp_id,
             "order": comp.get('order', i + 1),

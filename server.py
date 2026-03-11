@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.9"
+APP_VERSION = "32.10"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -442,19 +442,19 @@ class CoupangAPI:
             end_dt = start_dt + timedelta(hours=5)
             end_date_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        # vendorItemIds를 문자열 리스트로 변환
+        # vendorItemIds를 정수 리스트로 변환 (쿠팡 API 요구사항)
         if isinstance(vendor_item_ids, (int, str)):
-            vendor_item_ids_list = [str(vendor_item_ids)]
+            vendor_item_ids_list = [int(vendor_item_ids)]
         else:
-            vendor_item_ids_list = [str(vid) for vid in vendor_item_ids]
+            vendor_item_ids_list = [int(vid) for vid in vendor_item_ids]
         
         # 프로모션명 (필수!) - 기본값: "본사이언스 프라임 NMN 할인쿠폰"
         coupon_name = title or "본사이언스 프라임 NMN 할인쿠폰"
         
-        # 쿠폰 생성 요청 데이터 - vendorItemIds 포함!
+        # 쿠폰 생성 요청 데이터 - vendorItemIds는 정수 배열!
         data = {
             "contractId": str(contract_id),
-            "vendorItemIds": vendor_item_ids_list,
+            "vendorItemIds": vendor_item_ids_list,  # 정수 배열
             "startAt": start_date,
             "endAt": end_date_str,
             "type": discount_type,  # "PRICE" or "RATE"
@@ -525,27 +525,33 @@ class CoupangAPI:
         
         # 쿠폰 생성 완료 확인 후 상품 추가 API 호출
         if coupon_id:
-            print(f"[쿠폰 생성] ✅ 쿠폰 생성 완료! couponId: {coupon_id}")
+            print(f"[COUPON] Created! couponId: {coupon_id}")
             
-            # 쿠폰에 상품 추가 (별도 API 필요)
-            print(f"[쿠폰 생성] 상품 추가 중... vendorItemIds: {vendor_item_ids_list}")
+            # Add items to coupon (separate API call)
+            print(f"[COUPON] Adding items: {vendor_item_ids_list}")
             add_result = self.add_coupon_items(coupon_id, vendor_item_ids_list)
             
-            # 성공 여부 확인 (HTTP 성공 + 내부 code도 확인)
-            is_success = add_result.get('success', False)
-            if is_success:
-                inner_data = add_result.get('data', {})
-                if isinstance(inner_data, dict):
-                    inner_code = inner_data.get('code', 200)
-                    if inner_code >= 400:
-                        is_success = False
-                        print(f"[쿠폰 생성] ⚠️ 상품 추가 실패 (내부 코드: {inner_code})")
+            print(f"[COUPON] add_result: {add_result}")
             
-            if is_success:
-                print(f"[쿠폰 생성] ✅ 상품 추가 성공!")
+            # Check if items were actually added
+            is_success = add_result.get('success', False)
+            item_confirmed = add_result.get('item_add_confirmed', False)
+            item_failed = add_result.get('item_add_failed', False)
+            
+            if item_confirmed:
+                print(f"[COUPON] Items added CONFIRMED!")
                 result['items_added'] = True
+            elif item_failed:
+                print(f"[COUPON] Items add FAILED!")
+                result['items_added'] = False
+                result['items_add_error'] = add_result
+            elif is_success:
+                # API call succeeded but no confirmation yet
+                print(f"[COUPON] Items API OK, but not confirmed (async)")
+                result['items_added'] = True  # Assume success
             else:
-                print(f"[쿠폰 생성] ⚠️ 상품 추가 실패 (쿠폰은 생성됨)")
+                print(f"[COUPON] Items add FAILED (API error)")
+                result['items_added'] = False
                 result['items_add_error'] = add_result
             
             result['coupon_id'] = coupon_id
@@ -1992,6 +1998,32 @@ def debug_apply_prices(group_key):
     except Exception as e:
         steps.append({"step": "ERROR", "exception": str(e), "traceback": traceback.format_exc()})
         return jsonify({"success": False, "steps": steps, "error": str(e)}), 500
+
+
+@app.route('/api/debug/test-add-items/<coupon_id>/<vendor_item_id>', methods=['POST'])
+def debug_add_items(coupon_id, vendor_item_id):
+    """디버그용 - 특정 쿠폰에 상품 추가 테스트"""
+    import traceback
+    try:
+        config = load_config()
+        api = CoupangAPI(config)
+        
+        print(f"[DEBUG] Testing add_coupon_items: coupon={coupon_id}, item={vendor_item_id}")
+        result = api.add_coupon_items(int(coupon_id), [int(vendor_item_id)])
+        print(f"[DEBUG] Result: {result}")
+        
+        return jsonify({
+            "success": True,
+            "coupon_id": coupon_id,
+            "vendor_item_id": vendor_item_id,
+            "result": result
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 @app.route('/api/test', methods=['GET'])

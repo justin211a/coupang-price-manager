@@ -1936,6 +1936,62 @@ def apply_group_prices(group_key):
     })
 
 
+@app.route('/api/debug/apply-prices/<group_key>', methods=['POST'])
+def debug_apply_prices(group_key):
+    """디버그용 - 가격 적용 단계별 테스트"""
+    import traceback
+    steps = []
+    
+    try:
+        # Step 1: Config load
+        config = load_config()
+        steps.append({"step": 1, "name": "load_config", "ok": config is not None})
+        
+        if not config:
+            return jsonify({"steps": steps, "error": "Config not found"}), 404
+        
+        # Step 2: Group check
+        groups = config.get('product_groups', {})
+        group = groups.get(group_key)
+        steps.append({"step": 2, "name": "get_group", "ok": group is not None, "group_name": group.get('name') if group else None})
+        
+        if not group:
+            return jsonify({"steps": steps, "error": f"Group not found: {group_key}"}), 404
+        
+        # Step 3: Competitors
+        competitors = group.get('competitors', [])
+        competitor_price = competitors[0].get('last_price', 0) if competitors else 0
+        steps.append({"step": 3, "name": "competitors", "count": len(competitors), "price": competitor_price})
+        
+        # Step 4: Contract ID
+        contract_id = config.get('global_settings', {}).get('contract_id')
+        steps.append({"step": 4, "name": "contract_id", "ok": bool(contract_id), "value": contract_id})
+        
+        # Step 5: CoupangAPI init
+        api = CoupangAPI(config)
+        steps.append({"step": 5, "name": "CoupangAPI", "ok": True})
+        
+        # Step 6: Get coupons
+        coupons_result = api.get_coupons("APPLIED")
+        steps.append({"step": 6, "name": "get_coupons", "ok": coupons_result.get('success', False)})
+        
+        # Step 7: Products
+        products = group.get('products', {})
+        product_info = {}
+        for pk, pv in products.items():
+            product_info[pk] = {
+                "vendor_item_id": pv.get('vendor_item_id'),
+                "original_price": pv.get('original_price')
+            }
+        steps.append({"step": 7, "name": "products", "data": product_info})
+        
+        return jsonify({"success": True, "steps": steps})
+        
+    except Exception as e:
+        steps.append({"step": "ERROR", "exception": str(e), "traceback": traceback.format_exc()})
+        return jsonify({"success": False, "steps": steps, "error": str(e)}), 500
+
+
 @app.route('/api/test', methods=['GET'])
 def test_connection():
     """API 연결 테스트 - 상세 결과 반환"""

@@ -11,7 +11,7 @@
 
 import os
 import sys
-import time
+import time as time_module
 import hmac
 import hashlib
 import urllib.request
@@ -815,7 +815,7 @@ def crawl_competitor_prices(product_group):
         results.append(result)
         
         # 연속 요청 방지 (1초 대기)
-        time.sleep(1)
+        time_module.sleep(1)
     
     return results
 
@@ -1812,7 +1812,7 @@ def apply_group_prices(group_key):
     if cancelled_coupons:
         print(f"[쿠폰 파기] 총 {len(cancelled_coupons)}개 파기 완료")
         # 파기 후 1분 대기 (쿠팡 API 제한)
-        time.sleep(60)
+        time_module.sleep(60)
     
     # ==================== 새 쿠폰 발행 ====================
     results = []

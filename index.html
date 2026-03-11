@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>쿠팡 가격 경쟁 관리 v32</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .pulse { animation: pulse 2s ease-in-out infinite; }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+        input[type="number"] { -moz-appearance: textfield; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-4 md:p-6">
+<div class="max-w-6xl mx-auto">
+
+<!-- 헤더 -->
+<header class="flex flex-wrap justify-between items-center mb-6 gap-4">
+    <div>
+        <h1 class="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">🏷️ 쿠팡 가격 경쟁 관리 v32</h1>
+        <p class="text-gray-400 text-sm">제품 그룹별 자동 가격 관리 (즉시할인쿠폰)</p>
+    </div>
+    <div class="flex gap-2 items-center flex-wrap">
+        <span id="api-status" class="flex items-center gap-1 text-xs"><span class="w-2 h-2 bg-yellow-500 rounded-full pulse"></span> 연결 확인 중...</span>
+        <button onclick="testApi()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🧪 API</button>
+        <button onclick="testJandi()" class="px-3 py-1 bg-yellow-600 hover:bg-yellow-500 rounded text-sm">📢 잔디</button>
+        <button onclick="downloadConfig()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm">💾 백업</button>
+        <button onclick="loadConfig()" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🔄</button>
+    </div>
+</header>
+
+<!-- 제품 그룹 탭 -->
+<div class="bg-gray-800 rounded-2xl p-4 mb-6">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="font-bold text-lg">📦 제품 그룹</h2>
+        <button onclick="showAddGroupModal()" class="px-3 py-1 bg-green-600 hover:bg-green-500 rounded text-sm">+ 새 제품</button>
+    </div>
+    <div id="product-group-tabs" class="flex gap-2 flex-wrap"></div>
+</div>
+
+<!-- 현재 우위 상태 배너 -->
+<div id="status-banner" class="bg-gray-800 border border-gray-600 rounded-2xl p-4 mb-6"></div>
+
+<!-- 선택된 제품 그룹 설정 -->
+<div id="group-settings" class="bg-gray-800 rounded-2xl p-6 mb-6"></div>
+
+<!-- 가격 설정 -->
+<div id="price-settings" class="bg-gray-800 rounded-2xl p-6 mb-6"></div>
+
+<!-- 차트 -->
+<div class="bg-gray-800 rounded-2xl p-6 mb-6">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="font-bold text-xl">📊 가격 변동 & 판매량 추이</h2>
+        <div class="flex gap-2">
+            <button class="px-3 py-1 bg-purple-600 rounded text-sm">7일</button>
+            <button class="px-3 py-1 bg-gray-700 rounded text-sm">30일</button>
+        </div>
+    </div>
+    <div class="bg-gray-900 rounded-xl p-4"><canvas id="priceChart" height="180"></canvas></div>
+</div>
+
+<!-- AI 어드바이스 -->
+<div id="ai-insight-section" class="bg-gradient-to-br from-indigo-900/50 to-purple-900/50 border border-purple-500/30 rounded-2xl p-6 mb-6"></div>
+
+<!-- 로그 -->
+<div class="bg-gray-800 rounded-2xl p-6">
+    <h2 class="font-bold text-lg mb-4">📋 최근 로그</h2>
+    <div id="log-area" class="bg-gray-900 rounded-lg p-4 h-32 overflow-y-auto text-sm font-mono text-gray-400"><p>[시작] 페이지 로드됨</p></div>
+</div>
+
+</div>
+
+<!-- 모달: 새 제품 그룹 추가 -->
+<div id="add-group-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-2xl p-6 max-w-md w-full mx-4">
+        <h3 class="font-bold text-xl mb-4">새 제품 그룹 추가</h3>
+        <div class="space-y-4">
+            <div><label class="text-gray-400 text-sm mb-1 block">제품명</label><input type="text" id="new-group-name" placeholder="예: 레스베라트롤" class="w-full bg-gray-700 rounded-lg px-4 py-2"></div>
+            <div><label class="text-gray-400 text-sm mb-1 block">1개입 Vendor Item ID</label><input type="text" id="new-group-vid1" class="w-full bg-gray-700 rounded-lg px-4 py-2"></div>
+            <div><label class="text-gray-400 text-sm mb-1 block">3개입 Vendor Item ID</label><input type="text" id="new-group-vid3" class="w-full bg-gray-700 rounded-lg px-4 py-2"></div>
+            <div><label class="text-gray-400 text-sm mb-1 block">6개입 Vendor Item ID</label><input type="text" id="new-group-vid6" class="w-full bg-gray-700 rounded-lg px-4 py-2"></div>
+        </div>
+        <div class="flex gap-2 mt-6">
+            <button onclick="createProductGroup()" class="flex-1 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-bold">추가</button>
+            <button onclick="hideAddGroupModal()" class="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg">취소</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let config = null;
+let activeGroupKey = '';
+let priceChart = null;
+
+function log(msg) {
+    const area = document.getElementById('log-area');
+    const time = new Date().toLocaleTimeString('ko-KR');
+    area.innerHTML = `<p>[${time}] ${msg}</p>` + area.innerHTML;
+}
+
+function fmt(n) { return n ? n.toLocaleString() : '0'; }
+
+async function api(endpoint, method = 'GET', body = null) {
+    const opt = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opt.body = JSON.stringify(body);
+    const res = await fetch(endpoint, opt);
+    return res.json();
+}
+
+async function loadConfig() {
+    try {
+        config = await api('/api/config');
+        if (config.error) { log('❌ ' + config.error); return; }
+        activeGroupKey = config.active_group || Object.keys(config.product_groups || {})[0] || '';
+        renderAll();
+        log('✅ 설정 로드 완료');
+        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-green-500 rounded-full"></span> API 연결됨';
+        document.getElementById('api-status').className = 'flex items-center gap-1 text-xs text-green-400';
+    } catch (e) {
+        log('❌ 설정 로드 실패: ' + e.message);
+        document.getElementById('api-status').innerHTML = '<span class="w-2 h-2 bg-red-500 rounded-full"></span> 연결 실패';
+        document.getElementById('api-status').className = 'flex items-center gap-1 text-xs text-red-400';
+    }
+}
+
+function renderAll() {
+    renderProductGroupTabs();
+    renderGroupSettings();
+    renderPriceSettings();
+    renderStatusBanner();
+    renderAiInsight();
+    initChart();
+}
+
+function renderProductGroupTabs() {
+    const container = document.getElementById('product-group-tabs');
+    const groups = config.product_groups || {};
+    container.innerHTML = Object.entries(groups).map(([key, g]) => `
+        <button onclick="selectGroup('${key}')" class="px-4 py-2 rounded-xl font-medium flex items-center gap-2 ${key === activeGroupKey ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}">
+            ${g.name} ${g.auto_mode ? '<span class="text-xs bg-green-500 px-1.5 py-0.5 rounded">AUTO</span>' : ''}
+        </button>
+    `).join('');
+}
+
+function selectGroup(key) {
+    activeGroupKey = key;
+    config.active_group = key;
+    api('/api/config', 'POST', { active_group: key });
+    renderAll();
+    log(`📦 ${config.product_groups[key].name} 선택`);
+}
+
+function renderGroupSettings() {
+    const c = document.getElementById('group-settings');
+    const g = config.product_groups?.[activeGroupKey];
+    if (!g) { c.innerHTML = '<p class="text-gray-500 text-center py-8">제품 그룹을 선택하세요</p>'; return; }
+
+    c.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="font-bold text-xl">⚙️ ${g.name} 설정</h2>
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-400">오토모드</span>
+                <button onclick="toggleAutoMode()" class="w-14 h-7 rounded-full ${g.auto_mode ? 'bg-green-500' : 'bg-gray-600'} relative">
+                    <div class="w-5 h-5 bg-white rounded-full absolute top-1 ${g.auto_mode ? 'right-1' : 'left-1'}"></div>
+                </button>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-4">
+                <div><label class="text-gray-400 text-sm mb-1 block">🏷️ 쿠폰명</label><input type="text" value="${g.coupon_name || ''}" onchange="updateSetting('coupon_name', this.value)" class="w-full bg-gray-700 rounded-lg px-4 py-2"></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="text-gray-400 text-sm mb-1 block">경쟁사 대비 (원)</label>
+                        <div class="flex gap-2">
+                            <input type="number" value="${g.price_gap || 1000}" onchange="updateSetting('price_gap', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right">
+                            <select onchange="updateSetting('price_direction', this.value)" class="bg-gray-700 rounded-lg px-2 py-2">
+                                <option value="lower" ${g.price_direction === 'lower' ? 'selected' : ''}>낮게</option>
+                                <option value="higher" ${g.price_direction === 'higher' ? 'selected' : ''}>높게</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div><label class="text-gray-400 text-sm mb-1 block">쿠폰 유효시간</label>
+                        <div class="flex items-center gap-2">
+                            <input type="number" value="${g.discount_hours || 4}" onchange="updateSetting('discount_hours', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right">
+                            <span class="text-gray-400">시간</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="text-gray-400 text-sm mb-1 block">3병 추가할인 (%)</label><input type="number" value="${g.pack3_extra_discount || 0}" onchange="updateSetting('pack3_extra_discount', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"></div>
+                    <div><label class="text-gray-400 text-sm mb-1 block">6병 추가할인 (%)</label><input type="number" value="${g.pack6_extra_discount || 0}" onchange="updateSetting('pack6_extra_discount', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"></div>
+                </div>
+                <div><label class="text-gray-400 text-sm mb-1 block">💰 추정 원가 (1병)</label><input type="number" value="${g.estimated_cost || 0}" onchange="updateSetting('estimated_cost', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"><p class="text-xs text-gray-500 mt-1">AI 마진 분석에 사용</p></div>
+            </div>
+            <div class="bg-gray-700/50 rounded-xl p-4">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold">🎯 경쟁사 타겟 (최대 3개)</h3>
+                    <button onclick="addCompetitor()" class="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded">+ 추가</button>
+                </div>
+                <p class="text-xs text-yellow-400 mb-2">⚠️ 쿠팡 차단으로 자동 크롤링 제한됨. ✏️ 수동 입력 권장</p>
+                <div id="competitors-list" class="space-y-2">${renderCompetitors(g.competitors || [])}</div>
+            </div>
+        </div>
+    `;
+}
+
+function renderCompetitors(comps) {
+    if (!comps.length) return '<div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center text-gray-500 text-sm">경쟁사 URL을 추가하세요</div>';
+    return comps.map(c => `
+        <div class="bg-gray-800 rounded-lg p-3">
+            <div class="flex justify-between items-start mb-2">
+                <input type="text" value="${c.name || ''}" onchange="updateCompName('${c.id}', this.value)" class="bg-transparent text-white font-medium border-b border-gray-600 outline-none w-32">
+                <button onclick="deleteComp('${c.id}')" class="text-red-400 hover:text-red-300 text-sm">✕</button>
+            </div>
+            <input type="text" value="${c.url || ''}" readonly class="w-full bg-gray-700 rounded px-2 py-1 text-xs text-gray-300 mb-2">
+            <div class="flex justify-between items-center">
+                <span class="text-green-400 font-bold text-lg">${c.last_price ? fmt(c.last_price) + '원' : '가격 미입력'}</span>
+                <div class="flex gap-2 items-center">
+                    <span class="text-xs text-gray-500">${c.last_checked ? c.last_checked.split(' ')[1] || '' : ''}</span>
+                    <button onclick="manualPrice('${c.id}')" class="text-xs bg-purple-600 hover:bg-purple-500 px-3 py-1 rounded font-medium">✏️ 가격 입력</button>
+                </div>
+            </div>
+        </div>
+    `).join('') + (comps.length < 3 ? `<div onclick="addCompetitor()" class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center text-gray-500 text-sm cursor-pointer hover:border-gray-500">+ 경쟁사 추가 (${comps.length}/3)</div>` : '');
+}
+
+function renderPriceSettings() {
+    const c = document.getElementById('price-settings');
+    const g = config.product_groups?.[activeGroupKey];
+    if (!g) { c.innerHTML = ''; return; }
+    
+    const prods = g.products || {};
+    const comp = (g.competitors || [])[0];
+    const compPrice = comp?.last_price || 0;
+    const gap = g.price_gap || 1000;
+    const dir = g.price_direction || 'lower';
+
+    c.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="font-bold text-xl">💰 가격 설정</h2>
+            <button onclick="syncPrices()" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm">🔄 쿠팡 가격 동기화</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            ${['1bottle', '3bottle', '6bottle'].map((key, idx) => {
+                const p = prods[key] || {};
+                const mult = [1, 3, 6][idx];
+                const extra = [0, g.pack3_extra_discount || 0, g.pack6_extra_discount || 0][idx];
+                const base = dir === 'lower' ? compPrice - gap : compPrice + gap;
+                let target = base * mult;
+                if (extra > 0) target = Math.round(target * (1 - extra / 100) / 10) * 10;
+                target = Math.max(p.min_price || 0, Math.min(p.max_price || 999999, target));
+                const orig = p.original_price || 0;
+                const discount = orig - target;
+                const rate = orig > 0 ? Math.round((discount / orig) * 100) : 0;
+                const diff = compPrice > 0 ? (compPrice * mult) - target : 0;
+                const inRange = target >= (p.min_price || 0) && target <= (p.max_price || 999999);
+
+                return `
+                <div class="bg-gradient-to-br from-gray-700 to-gray-800 rounded-xl p-4 border ${idx === 0 ? 'border-2 border-purple-500/50' : 'border-gray-600'}">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-lg">${p.name || key}</h3>
+                        <span class="text-xs text-gray-400">${p.vendor_item_id || ''}</span>
+                    </div>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between"><span class="text-gray-400">정가 (쿠팡)</span><span>${fmt(orig)}원</span></div>
+                        <div class="flex justify-between pt-2 border-t border-gray-600"><span class="text-gray-400">🎫 쿠폰 할인</span><span class="text-purple-400">-${fmt(discount)}원</span></div>
+                        <div class="bg-green-900/30 rounded-lg p-3 -mx-1">
+                            <div class="flex justify-between items-center"><span class="text-green-300 font-bold">최종 판매가</span><span class="text-green-400 font-bold text-xl">${fmt(target)}원</span></div>
+                            <div class="flex justify-between items-center mt-1"><span class="text-green-300/70 text-xs">쿠팡 할인율</span><span class="text-green-400 font-bold">${rate}% OFF</span></div>
+                        </div>
+                        ${compPrice > 0 ? `<div class="bg-blue-900/30 rounded-lg p-2 text-center"><span class="text-blue-300 text-sm">경쟁사 대비 </span><span class="text-blue-400 font-bold">${fmt(Math.abs(diff))}원 ${diff > 0 ? '저렴' : '비쌈'}</span></div>` : ''}
+                        <div class="pt-2 border-t border-gray-600">
+                            <div class="flex gap-1 items-center">
+                                <input type="number" id="min-${key}" value="${p.min_price || 0}" class="w-full bg-gray-600 rounded px-2 py-1 text-xs text-right">
+                                <span class="text-gray-500">~</span>
+                                <input type="number" id="max-${key}" value="${p.max_price || 0}" class="w-full bg-gray-600 rounded px-2 py-1 text-xs text-right">
+                                <button onclick="saveLimits('${key}')" class="bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded text-xs">💾</button>
+                            </div>
+                            <p class="text-xs ${inRange ? 'text-green-400' : 'text-red-400'} mt-1">${inRange ? '✅ 범위 내' : '⚠️ 범위 초과'}</p>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>
+        <button onclick="applyAllPrices()" class="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-xl font-bold text-lg">🚀 전체 적용 (1+3+6병 쿠폰 발행, ${g.discount_hours || 4}시간)</button>
+    `;
+}
+
+function renderStatusBanner() {
+    const c = document.getElementById('status-banner');
+    const g = config.product_groups?.[activeGroupKey];
+    if (!g) return;
+    const comp = (g.competitors || [])[0];
+    const compPrice = comp?.last_price || 0;
+    const ourPrice = g.products?.['1bottle']?.current_price || 0;
+
+    if (!compPrice) {
+        c.className = 'bg-gray-800 border border-gray-600 rounded-2xl p-4 mb-6';
+        c.innerHTML = '<div class="flex items-center gap-3"><span class="text-3xl">⏳</span><div><p class="font-bold text-gray-400 text-lg">경쟁사 가격 확인 필요</p><p class="text-gray-500">경쟁사를 추가하고 크롤링하세요</p></div></div>';
+        return;
+    }
+
+    const diff = compPrice - ourPrice;
+    const win = diff > 0;
+    c.className = `bg-gradient-to-r ${win ? 'from-green-900/50 to-emerald-900/50 border-green-500/50' : 'from-red-900/50 to-orange-900/50 border-red-500/50'} border rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-4`;
+    c.innerHTML = `
+        <div class="flex items-center gap-3"><span class="text-3xl">${win ? '🏆' : '⚠️'}</span><div><p class="font-bold ${win ? 'text-green-400' : 'text-red-400'} text-lg">${win ? '현재 우위' : '경쟁사 앞섬'}</p><p class="${win ? 'text-green-300' : 'text-red-300'}">경쟁사보다 <span class="font-bold text-xl">${fmt(Math.abs(diff))}원</span> ${win ? '저렴' : '비쌈'}</p></div></div>
+        <div class="text-right"><p class="text-gray-400 text-sm">우리 가격</p><p class="text-2xl font-bold">${fmt(ourPrice)}원</p></div>
+        <div class="text-right"><p class="text-gray-400 text-sm">경쟁사 가격</p><p class="text-2xl font-bold text-gray-300">${fmt(compPrice)}원</p></div>
+    `;
+}
+
+async function renderAiInsight() {
+    const c = document.getElementById('ai-insight-section');
+    const g = config.product_groups?.[activeGroupKey];
+    if (!g) { c.innerHTML = ''; return; }
+
+    let res = { can_generate: true, insight: null };
+    try { res = await api(`/api/product-groups/${activeGroupKey}/ai-insight`); } catch (e) {}
+    const canGen = res.can_generate;
+    const ins = res.insight;
+
+    c.innerHTML = `
+        <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+            <div class="flex items-center gap-2"><span class="text-2xl">🤖</span><h2 class="font-bold text-xl">AI 어드바이스</h2><span class="text-xs bg-purple-600 px-2 py-0.5 rounded">마진 밸런스</span></div>
+            <div class="flex items-center gap-3">
+                <div class="text-right"><p class="text-xs text-gray-400">${g.name} · ${res.last_generated ? '분석 완료' : '미분석'}</p><p class="text-xs text-purple-400">${canGen ? '분석 가능' : '다음: 내일 00:00'}</p></div>
+                <button onclick="genAiInsight()" ${canGen ? '' : 'disabled'} class="px-3 py-1 ${canGen ? 'bg-purple-600 hover:bg-purple-500' : 'bg-gray-600 text-gray-400 cursor-not-allowed'} rounded text-sm">${canGen ? '🔄 AI 인사이트 생성' : '✅ 분석 완료'}</button>
+            </div>
+        </div>
+        ${ins ? renderInsightResult(ins) : '<div class="text-center py-8 text-gray-500"><p>아직 분석 결과가 없습니다.</p><p class="text-sm mt-2">"AI 인사이트 생성" 버튼을 클릭하세요.</p></div>'}
+    `;
+}
+
+function renderInsightResult(ins) {
+    const cs = ins.current_state || {};
+    const opt = ins.optimal || {};
+    const sims = ins.simulations || [];
+    return `
+        <div class="bg-gray-800/50 rounded-xl p-4 mb-4">
+            <h3 class="font-bold text-purple-300 mb-3">💰 현재 상태</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div><p class="text-gray-400 text-xs">판매가</p><p class="text-xl font-bold">${fmt(cs.price)}원</p></div>
+                <div><p class="text-gray-400 text-xs">원가</p><p class="text-xl font-bold">${fmt(cs.cost)}원</p></div>
+                <div><p class="text-gray-400 text-xs">마진</p><p class="text-xl font-bold text-green-400">${fmt(cs.margin)}원</p></div>
+                <div><p class="text-gray-400 text-xs">마진율</p><p class="text-xl font-bold text-green-400">${cs.margin_rate}%</p></div>
+            </div>
+        </div>
+        <div class="bg-gray-800/50 rounded-xl p-4 mb-4 overflow-x-auto">
+            <h3 class="font-bold text-purple-300 mb-3">📈 가격 시뮬레이션</h3>
+            <table class="w-full text-sm"><thead><tr class="text-gray-400 border-b border-gray-700"><th class="text-left py-2">판매가</th><th class="text-center py-2">마진율</th><th class="text-center py-2">예상판매</th><th class="text-center py-2">일수익</th><th class="text-right py-2">vs현재</th></tr></thead><tbody>
+            ${sims.slice(0, 5).map(s => `<tr class="border-b border-gray-700/50 ${s.price === opt.price ? 'bg-yellow-900/20' : s.price === cs.price ? 'bg-purple-900/20' : ''}"><td class="py-2 ${s.price === opt.price ? 'font-bold text-yellow-400' : s.price === cs.price ? 'font-bold text-purple-400' : ''}">${fmt(s.price)}원 ${s.price === opt.price ? '🔥' : s.price === cs.price ? '(현재)' : ''}</td><td class="text-center">${s.margin_rate}%</td><td class="text-center">${s.expected_qty}개</td><td class="text-center">${fmt(s.daily_profit)}원</td><td class="text-right ${s.profit_change_pct > 0 ? 'text-green-400' : s.profit_change_pct < 0 ? 'text-red-400' : ''}">${s.profit_change_pct > 0 ? '+' : ''}${s.profit_change_pct}%</td></tr>`).join('')}
+            </tbody></table>
+        </div>
+        <div class="bg-gradient-to-r from-green-900/30 to-emerald-900/30 border border-green-500/30 rounded-xl p-4">
+            <div class="flex items-start gap-3"><span class="text-2xl">🎯</span><div class="flex-1"><h3 class="font-bold text-green-400 text-lg mb-2">AI 추천: 최적 가격 ${fmt(opt.price)}원</h3><p class="text-sm text-gray-300">${ins.recommendation || ''}</p><div class="mt-3"><button onclick="applyRecommended(${opt.price})" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-bold">✅ 추천 가격 적용</button></div></div></div>
+        </div>
+        ${ins.warning ? `<div class="mt-4 bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-3"><span>⚠️</span> <span class="text-sm text-yellow-300/80">${ins.warning}</span></div>` : ''}
+    `;
+}
+
+async function updateSetting(key, val) {
+    if (!activeGroupKey) return;
+    const body = { product_groups: {} };
+    body.product_groups[activeGroupKey] = { [key]: val };
+    await api('/api/config', 'POST', body);
+    config.product_groups[activeGroupKey][key] = val;
+    renderPriceSettings();
+    log(`⚙️ ${key} = ${val}`);
+}
+
+async function toggleAutoMode() {
+    const g = config.product_groups?.[activeGroupKey];
+    if (!g) return;
+    await updateSetting('auto_mode', !g.auto_mode);
+    renderProductGroupTabs();
+    renderGroupSettings();
+    log(`🤖 오토모드 ${!g.auto_mode ? 'ON' : 'OFF'}`);
+}
+
+async function addCompetitor() {
+    const url = prompt('경쟁사 쿠팡 URL:');
+    if (!url) return;
+    const name = prompt('경쟁사 이름:') || '경쟁사';
+    const res = await api(`/api/product-groups/${activeGroupKey}/competitors`, 'POST', { url, name });
+    if (res.error) { log('❌ ' + res.error); alert(res.error); return; }
+    await loadConfig();
+    log(`✅ 경쟁사 추가: ${name}`);
+}
+
+async function deleteComp(id) {
+    if (!confirm('삭제하시겠습니까?')) return;
+    await api(`/api/product-groups/${activeGroupKey}/competitors/${id}`, 'DELETE');
+    await loadConfig();
+    log('🗑️ 경쟁사 삭제');
+}
+
+async function crawlComp() {
+    log('🔄 크롤링 시도 중...');
+    const res = await api(`/api/product-groups/${activeGroupKey}/crawl-competitors`, 'POST');
+    if (res.error) { log('❌ ' + res.error); }
+    await loadConfig();
+    const r = res.results?.[0];
+    if (r?.success) {
+        log(`✅ 크롤링 성공: ${fmt(r.price)}원`);
+    } else {
+        log('⚠️ 쿠팡 차단 - ✏️ 버튼으로 수동 입력하세요');
+        alert('쿠팡 봇 차단으로 크롤링 실패\\n\\n경쟁사 상품 페이지에서 가격을 확인 후\\n✏️ 버튼으로 수동 입력해주세요.');
+    }
+}
+
+async function manualPrice(id) {
+    const price = prompt('경쟁사 가격:');
+    if (!price) return;
+    await api(`/api/product-groups/${activeGroupKey}/competitors/${id}/price`, 'POST', { price: parseInt(price) });
+    await loadConfig();
+    log(`✏️ 수동 입력: ${fmt(parseInt(price))}원`);
+}
+
+async function syncPrices() {
+    log('🔄 쿠팡 가격 동기화 중...');
+    const res = await api(`/api/product-groups/${activeGroupKey}/sync-prices`, 'POST');
+    if (res.error) { log('❌ ' + res.error); return; }
+    await loadConfig();
+    log('✅ 가격 동기화 완료');
+}
+
+async function saveLimits(key) {
+    const min = parseInt(document.getElementById(`min-${key}`).value) || 0;
+    const max = parseInt(document.getElementById(`max-${key}`).value) || 0;
+    await api(`/api/product-groups/${activeGroupKey}`, 'PUT', { products: { [key]: { min_price: min, max_price: max } } });
+    config.product_groups[activeGroupKey].products[key].min_price = min;
+    config.product_groups[activeGroupKey].products[key].max_price = max;
+    renderPriceSettings();
+    log(`💾 ${key} 안전장치: ${fmt(min)} ~ ${fmt(max)}`);
+}
+
+async function applyAllPrices() {
+    if (!confirm('1+3+6병 전체에 쿠폰을 발행하시겠습니까?')) return;
+    log('🚀 전체 가격 적용 중...');
+    const res = await api(`/api/product-groups/${activeGroupKey}/apply-prices`, 'POST');
+    if (res.error) { log('❌ ' + res.error); alert(res.error); return; }
+    await loadConfig();
+    log('✅ 전체 가격 적용 완료');
+    alert('쿠폰 발행 요청 완료! 쿠팡 적용까지 최대 30분 소요될 수 있습니다.');
+}
+
+async function genAiInsight() {
+    log('🤖 AI 인사이트 생성 중...');
+    const res = await api(`/api/product-groups/${activeGroupKey}/ai-insight`, 'POST');
+    if (res.error) { log('❌ ' + res.error); alert(res.error); return; }
+    log('✅ AI 인사이트 생성 완료');
+    renderAiInsight();
+}
+
+function showAddGroupModal() { document.getElementById('add-group-modal').classList.remove('hidden'); document.getElementById('add-group-modal').classList.add('flex'); }
+function hideAddGroupModal() { document.getElementById('add-group-modal').classList.add('hidden'); document.getElementById('add-group-modal').classList.remove('flex'); }
+
+async function createProductGroup() {
+    const name = document.getElementById('new-group-name').value.trim();
+    const vid1 = document.getElementById('new-group-vid1').value.trim();
+    const vid3 = document.getElementById('new-group-vid3').value.trim();
+    const vid6 = document.getElementById('new-group-vid6').value.trim();
+    if (!name) { alert('제품명 입력'); return; }
+    if (!vid1) { alert('1개입 Vendor Item ID 입력'); return; }
+    const key = name.toLowerCase().replace(/[^a-z0-9가-힣]/g, '_');
+    const res = await api('/api/product-groups', 'POST', { key, group: { name, products: { '1bottle': { name: '1개입', vendor_item_id: parseInt(vid1) || 0 }, '3bottle': { name: '3개입', vendor_item_id: parseInt(vid3) || 0 }, '6bottle': { name: '6개입', vendor_item_id: parseInt(vid6) || 0 } } } });
+    if (res.error) { log('❌ ' + res.error); alert(res.error); return; }
+    hideAddGroupModal();
+    await loadConfig();
+    selectGroup(key);
+    log(`✅ 제품 그룹 생성: ${name}`);
+}
+
+async function testApi() {
+    log('🧪 API 테스트...');
+    const res = await api('/api/test');
+    if (res.success) {
+        log('✅ API 연결 성공');
+        alert(`✅ 쿠팡 Wing API 연결 성공!\n\n` +
+            `📦 Vendor ID: ${res.vendor_id}\n` +
+            `🏷️ 테스트 상품: ${res.test_product}\n` +
+            `🔑 Item ID: ${res.vendor_item_id}\n\n` +
+            `정가: ${fmt(res.api_response?.original_price)}원\n` +
+            `판매가: ${fmt(res.api_response?.sale_price)}원\n` +
+            `재고: ${res.api_response?.quantity}개`);
+    } else {
+        log('❌ API 테스트 실패: ' + (res.error || ''));
+        alert('❌ API 테스트 실패\n\n' + (res.error || JSON.stringify(res.details, null, 2)));
+    }
+}
+
+async function testJandi() {
+    log('📢 잔디 테스트...');
+    const res = await api('/api/test-jandi', 'POST');
+    log(res.success ? '✅ 잔디 알림 전송 성공' : '❌ 잔디 알림 실패');
+    alert(res.success ? '잔디 알림 전송됨!' : '잔디 알림 실패');
+}
+
+function downloadConfig() { window.open('/api/config/download', '_blank'); log('💾 설정 백업'); }
+
+function initChart() {
+    const ctx = document.getElementById('priceChart').getContext('2d');
+    if (priceChart) priceChart.destroy();
+    priceChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: ['7일전', '6일전', '5일전', '4일전', '3일전', '2일전', '오늘'],
+            datasets: [
+                { label: '우리 가격', data: [33000, 32500, 31500, 31500, 32000, 31500, 31500], borderColor: '#8b5cf6', tension: 0.3, yAxisID: 'y' },
+                { label: '경쟁사', data: [33500, 33000, 32500, 32500, 33000, 32500, 32500], borderColor: '#f59e0b', borderDash: [5, 5], tension: 0.3, yAxisID: 'y' },
+                { label: '판매량', data: [8, 10, 15, 14, 11, 16, 18], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.2)', fill: true, tension: 0.3, yAxisID: 'y1' }
+            ]
+        },
+        options: {
+            responsive: true, interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+            scales: {
+                x: { ticks: { color: '#9ca3af' }, grid: { color: '#374151' } },
+                y: { position: 'left', ticks: { color: '#9ca3af' }, grid: { color: '#374151' } },
+                y1: { position: 'right', ticks: { color: '#9ca3af' }, grid: { drawOnChartArea: false } }
+            }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', loadConfig);
+</script>
+</body>
+</html>

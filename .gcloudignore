@@ -1,0 +1,20 @@
+# 빌드에서 제외할 파일들
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+*.db
+.env
+.venv
+venv/
+deploy.bat
+README.md
+README_UPDATE.txt
+install.bat
+run-local.bat
+
+# config.json은 함께 배포 (클로드와 서버 동기화)

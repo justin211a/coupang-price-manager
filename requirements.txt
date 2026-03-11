@@ -1,0 +1,11 @@
+# 쿠팡 가격 경쟁 관리 - 필수 패키지
+flask>=3.0.0
+apscheduler>=3.10.0
+google-cloud-bigquery>=3.0.0
+gunicorn>=21.0.0
+pytz>=2024.1
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0

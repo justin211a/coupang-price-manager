@@ -1,0 +1,108 @@
+{
+  "api": {
+    "access_key": "b2b6748d-9588-47de-954f-2cef119d1240",
+    "secret_key": "c404d13c97f4271ae8e8933227cf970c65e7e5cc",
+    "vendor_id": "A00479438",
+    "base_url": "https://api-gateway.coupang.com"
+  },
+  "global_settings": {
+    "jandi_webhook": "https://wh.jandi.com/connect-api/webhook/18891904/0afe7bcc161e91ead2a9297c2d242ad0",
+    "coupon_budget": 500000,
+    "coupon_used": 0,
+    "contract_id": "173582"
+  },
+  "product_groups": {
+    "prime_nmn": {
+      "name": "PRIME NMN 60정",
+      "enabled": true,
+      "auto_mode": false,
+      "coupon_name": "본사이언스 프라임 NMN 할인쿠폰",
+      "price_gap": 1100,
+      "price_direction": "lower",
+      "discount_hours": 4,
+      "check_interval_minutes": 240,
+      "pack3_extra_discount": 3,
+      "pack6_extra_discount": 7,
+      "estimated_cost": 25000,
+      "products": {
+        "1bottle": {
+          "name": "1개입",
+          "vendor_item_id": 92195127705,
+          "original_price": 68000,
+          "current_price": 51520,
+          "min_price": 47500,
+          "max_price": 67500
+        },
+        "3bottle": {
+          "name": "3개입",
+          "vendor_item_id": 92195127720,
+          "original_price": 190000,
+          "current_price": 147600,
+          "min_price": 139000,
+          "max_price": 169000
+        },
+        "6bottle": {
+          "name": "6개입",
+          "vendor_item_id": 92195127713,
+          "original_price": 340000,
+          "current_price": 283020,
+          "min_price": 275000,
+          "max_price": 295000
+        }
+      },
+      "competitors": [
+        {
+          "id": "rokit_nmn",
+          "name": "로킷아메리카 NMN",
+          "url": "https://www.coupang.com/vp/products/7830558357?vendorItemId=91009775851",
+          "vendor_item_id": "91009775851",
+          "last_price": 52720,
+          "last_checked": ""
+        }
+      ],
+      "ai_insight": {}
+    },
+    "resveratrol": {
+      "name": "레스베라트롤",
+      "enabled": true,
+      "auto_mode": true,
+      "coupon_name": "본사이언스 레스베라트롤 할인쿠폰",
+      "price_gap": 1000,
+      "price_direction": "lower",
+      "discount_hours": 4,
+      "check_interval_minutes": 240,
+      "pack3_extra_discount": 3,
+      "pack6_extra_discount": 7,
+      "estimated_cost": 15000,
+      "products": {
+        "1bottle": {
+          "name": "1개입",
+          "vendor_item_id": 92628641615,
+          "original_price": 0,
+          "current_price": 0,
+          "min_price": 20000,
+          "max_price": 50000
+        },
+        "3bottle": {
+          "name": "3개입",
+          "vendor_item_id": 92628641625,
+          "original_price": 0,
+          "current_price": 0,
+          "min_price": 50000,
+          "max_price": 140000
+        },
+        "6bottle": {
+          "name": "6개입",
+          "vendor_item_id": 92628641605,
+          "original_price": 0,
+          "current_price": 0,
+          "min_price": 100000,
+          "max_price": 280000
+        }
+      },
+      "competitors": [],
+      "ai_insight": {}
+    }
+  },
+  "active_group": "resveratrol"
+}

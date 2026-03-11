@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+
+# 인증 키 (절대 커밋 금지!)
+service_account.json
+*.json.bak
+
+# 로컬 데이터
+price_history.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

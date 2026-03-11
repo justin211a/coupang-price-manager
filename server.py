@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.6"
+APP_VERSION = "32.7"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -486,24 +486,21 @@ class CoupangAPI:
         coupon_id = None
         
         if requested_id:
-            print(f"[쿠폰 생성] requestedId: {requested_id}, 상태 확인 중...")
+            print(f"[COUPON] requestedId: {requested_id}, checking status...")
             
-            # 최대 10초 대기 (2초 간격으로 5회 시도)
-            for i in range(5):
-                time_module.sleep(2)
+            # Wait max 3 seconds (1s x 3 attempts)
+            for i in range(3):
+                time_module.sleep(1)
                 status_result = self.get_coupon_request_status(requested_id)
                 
                 if status_result.get('success'):
                     status_data = status_result.get('data', {})
                     
-                    # 응답 구조 파싱 (여러 구조 대응)
                     status = None
                     
                     if isinstance(status_data, dict):
-                        # 구조 1: data.data.status
                         inner_data = status_data.get('data', {})
                         if isinstance(inner_data, dict):
-                            # content 안에 있을 수도 있음
                             content = inner_data.get('content', inner_data)
                             if isinstance(content, dict):
                                 status = content.get('status')
@@ -512,14 +509,14 @@ class CoupangAPI:
                                 status = inner_data.get('status')
                                 coupon_id = inner_data.get('couponId')
                     
-                    print(f"[쿠폰 생성] 시도 {i+1}: status={status}, couponId={coupon_id}")
+                    print(f"[COUPON] Attempt {i+1}: status={status}, couponId={coupon_id}")
                     
                     if status in ['COMPLETED', 'DONE'] and coupon_id:
                         break
                     elif status in ['FAILED', 'FAIL']:
                         error_msg = ''
                         if isinstance(inner_data, dict):
-                            error_msg = inner_data.get('errorMessage', inner_data.get('message', '쿠폰 생성 실패'))
+                            error_msg = inner_data.get('errorMessage', inner_data.get('message', 'Coupon creation failed'))
                         result['coupon_creation_failed'] = True
                         result['error_detail'] = error_msg
                         return result
@@ -586,11 +583,11 @@ class CoupangAPI:
                         requested_id = content.get('requestedId')
             
             if requested_id:
-                print(f"[상품 추가] requestedId: {requested_id}, 상태 확인 중...")
+                print(f"[ITEMS] requestedId: {requested_id}, checking...")
                 
-                # 최대 10초 대기 (2초 간격으로 5회 시도)
-                for i in range(5):
-                    time_module.sleep(2)
+                # Wait max 3 seconds (1s x 3 attempts)
+                for i in range(3):
+                    time_module.sleep(1)
                     status_result = self.get_item_add_status(coupon_id, requested_id)
                     
                     if status_result.get('success'):
@@ -606,15 +603,15 @@ class CoupangAPI:
                                 else:
                                     status = inner_data.get('status')
                         
-                        print(f"[상품 추가] 시도 {i+1}: status={status}")
+                        print(f"[ITEMS] Attempt {i+1}: status={status}")
                         
                         if status in ['COMPLETED', 'DONE']:
                             result['item_add_confirmed'] = True
-                            print(f"[상품 추가] ✅ 상품 연결 확인 완료!")
+                            print(f"[ITEMS] OK: Items added!")
                             break
                         elif status in ['FAILED', 'FAIL']:
                             result['item_add_failed'] = True
-                            print(f"[상품 추가] ❌ 상품 연결 실패")
+                            print(f"[ITEMS] FAILED: Items not added")
                             break
         
         return result
@@ -1807,17 +1804,17 @@ def apply_group_prices(group_key):
                     cancelled_coupons.append(f"{promo_name} (ID: {coupon_id})")
                     log_action("COUPON_CANCEL", f"기존 쿠폰 파기: {promo_name} ({group_key})")
                 else:
-                    log_action("COUPON_CANCEL_FAIL", f"쿠폰 파기 실패: {coupon_id}", cancel_result)
+                    log_action("COUPON_CANCEL_FAIL", f"Coupon cancel failed: {coupon_id}", cancel_result)
     
     if cancelled_coupons:
-        print(f"[쿠폰 파기] 총 {len(cancelled_coupons)}개 파기 완료")
-        # 파기 후 1분 대기 (쿠팡 API 제한)
-        time_module.sleep(60)
+        print(f"[CANCEL] {len(cancelled_coupons)} coupons cancelled")
+        # Short delay after cancellation
+        time_module.sleep(5)
     
-    # ==================== 새 쿠폰 발행 ====================
+    # ==================== Create new coupons ====================
     results = []
     
-    # 1병, 3병, 6병 순서
+    # 1bottle, 3bottle, 6bottle
     product_configs = [
         ('1bottle', 1, 0),
         ('3bottle', 3, group.get('pack3_extra_discount', 0)),

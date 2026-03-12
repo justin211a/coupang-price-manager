@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.3"
+APP_VERSION = "33.4"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -2082,15 +2082,38 @@ def apply_group_prices(group_key):
             continue
         
         vendor_item_id = product['vendor_item_id']
-        original_price = product.get('original_price', 0)
+        config_original_price = product.get('original_price', 0)
         min_price = product.get('min_price', 0)
         max_price = product.get('max_price', 999999)
         
-        if not original_price:
+        # ★★★ 핵심: 쿠팡 WING API로 실제 판매가 조회 ★★★
+        inventory = api.get_inventory(vendor_item_id)
+        actual_sale_price = 0
+        
+        if inventory.get('success'):
+            inv_data = inventory.get('data', {})
+            if isinstance(inv_data, dict):
+                actual_sale_price = inv_data.get('salePrice', 0)
+                if not actual_sale_price:
+                    # 다른 구조 대응
+                    items = inv_data.get('data', [])
+                    if isinstance(items, list) and items:
+                        actual_sale_price = items[0].get('salePrice', 0)
+                    elif isinstance(items, dict):
+                        actual_sale_price = items.get('salePrice', 0)
+        
+        if not actual_sale_price:
+            # API 조회 실패 시 config 값 사용 (경고 포함)
+            actual_sale_price = config_original_price
+            print(f"[APPLY] WARNING: Could not get actual price for {product_key}, using config: {config_original_price}")
+        
+        print(f"[APPLY] {product_key}: config_original={config_original_price}, actual_sale={actual_sale_price}")
+        
+        if not actual_sale_price:
             results.append({
                 "product": product.get('name', product_key),
                 "success": False,
-                "error": "정가 정보 없음"
+                "error": "가격 정보를 가져올 수 없음"
             })
             continue
         
@@ -2108,13 +2131,25 @@ def apply_group_prices(group_key):
         # 안전장치 적용
         target_price = max(min_price, min(max_price, target_price))
         
-        discount_amount = original_price - target_price
+        # ★★★ 할인금액 = 실제 쿠팡 판매가 - 목표가격 (정가 아닌 판매가 기준!) ★★★
+        discount_amount = actual_sale_price - target_price
         
         if discount_amount <= 0:
+            # 이미 목표가보다 싸면 쿠폰 불필요
             results.append({
                 "product": product.get('name', product_key),
                 "success": False,
-                "error": f"할인금액 계산 오류 (정가: {original_price}, 목표: {target_price})"
+                "error": f"쿠폰 불필요 (현재 판매가 {actual_sale_price:,}원 ≤ 목표가 {target_price:,}원)"
+            })
+            continue
+        
+        # 안전 검증: 할인 후 가격이 min_price 밑으로 내려가면 차단
+        final_price = actual_sale_price - discount_amount
+        if final_price < min_price:
+            results.append({
+                "product": product.get('name', product_key),
+                "success": False,
+                "error": f"최저가 위반! (판매가 {actual_sale_price:,} - 할인 {discount_amount:,} = {final_price:,} < 최저가 {min_price:,})"
             })
             continue
         
@@ -2135,13 +2170,16 @@ def apply_group_prices(group_key):
             if coupon_result.get('success'):
                 coupon_id = coupon_result.get('coupon_id')
                 items_added = coupon_result.get('items_added', False)
+                expected_final = actual_sale_price - discount_amount
                 
                 products[product_key]['current_price'] = target_price
                 results.append({
                     "product": product.get('name', product_key),
                     "vendor_item_id": vendor_item_id,
-                    "target_price": target_price,
+                    "actual_sale_price": actual_sale_price,
                     "discount_amount": discount_amount,
+                    "target_price": target_price,
+                    "expected_final_price": expected_final,
                     "coupon_id": coupon_id,
                     "items_added": items_added,
                     "success": True
@@ -2173,7 +2211,7 @@ def apply_group_prices(group_key):
     # 잔디 알림
     if success_count > 0:
         body = "\n".join([
-            f"✅ {r['product']}: {r.get('target_price', 0):,}원 ({r.get('discount_amount', 0):,}원 할인)"
+            f"✅ {r['product']}: 판매가 {r.get('actual_sale_price', 0):,} → 할인 {r.get('discount_amount', 0):,} → 최종 {r.get('expected_final_price', 0):,}원"
             for r in results if r.get('success')
         ])
         if blocked_count > 0:

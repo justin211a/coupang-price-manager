@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.8"
+APP_VERSION = "33.9"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -2063,17 +2063,16 @@ def sync_group_prices(group_key):
 # ==================== 쿠폰 정리 ====================
 
 def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
-    """해당 그룹의 기존 쿠폰을 전부 파기 (고정 쿠폰 제외)
+    """해당 그룹의 기존 쿠폰을 전부 파기 (고정 쿠폰 + 보호 쿠폰 제외)
     
-    쿠폰 이름에 group_name 또는 coupon_name이 포함된 것을 찾아서 파기.
-    고정 쿠폰(여러 상품 범용)은 파기하지 않고 blocked로 반환.
+    쿠폰 이름에 coupon_name이 포함된 것만 찾아서 파기.
+    고정 쿠폰(여러 상품 범용)과 보호 대상(증량판 등)은 파기하지 않음.
     """
     if fixed_keywords is None:
         fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
     
-    # 상품 관련 키워드 - 이것이 포함되면 특정 상품 전용 쿠폰 (파기 가능)
-    product_keywords = ['레스베라트롤', 'NMN', 'nmn', '프라임', 'PRIME', '닥터스', 'DiGU', '디구',
-                       '멜라토닌', '그로우', '증량']
+    # 보호 키워드 - 이것이 포함되면 절대 파기하지 않음
+    protected_keywords = ['증량판', '증량']
     
     cancelled = []
     blocked = []
@@ -2100,22 +2099,22 @@ def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
         if not coupon_id or status in ['EXPIRED', 'CANCELLED']:
             continue
         
-        # 이 그룹의 쿠폰인지 확인 (그룹명 또는 쿠폰명이 포함)
+        # 보호 대상 쿠폰은 절대 건드리지 않음 (증량판 등)
+        if any(pk in promo_name for pk in protected_keywords):
+            print(f"[CLEANUP] PROTECTED (증량판 등): {promo_name} (ID: {coupon_id})")
+            continue
+        
+        # 이 그룹의 쿠폰인지 확인: coupon_name 전체가 promo_name에 포함되어야 매칭
         is_group_coupon = False
-        if group_name and group_name in promo_name:
-            is_group_coupon = True
-        if coupon_name and coupon_name.split(' ')[0] in promo_name:
-            # 쿠폰명의 첫 부분(예: "본사이언스 레스베라트롤")이 포함되면 매칭
+        if coupon_name and coupon_name in promo_name:
             is_group_coupon = True
         
         if not is_group_coupon:
             continue
         
-        # 고정 쿠폰 판별: 고정 키워드 있고 + 상품 키워드 없으면 → 고정 (파기 불가)
+        # 고정 쿠폰 판별: 고정 키워드만 있고 coupon_name이 없으면 → 고정 (파기 불가)
         has_fixed_kw = any(fk in promo_name for fk in fixed_keywords)
-        has_product_kw = any(pk in promo_name for pk in product_keywords)
-        
-        if has_fixed_kw and not has_product_kw:
+        if has_fixed_kw:
             print(f"[CLEANUP] BLOCKED (fixed): {promo_name} (ID: {coupon_id})")
             blocked.append({'coupon_id': coupon_id, 'name': promo_name})
             continue
@@ -2317,7 +2316,7 @@ def apply_group_prices(group_key):
                 discount_amount=discount_amount,
                 contract_id=contract_id,
                 hours=discount_hours,
-                title=f"{coupon_name} {discount_amount:,}원"
+                title=f"{coupon_name} {multiplier}병 {discount_amount:,}원"
             )
             
             print(f"[COUPON] Result for {product_key}: {coupon_result}")

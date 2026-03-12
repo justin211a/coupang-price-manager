@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.5"
+APP_VERSION = "33.6"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -877,6 +877,107 @@ def send_jandi_notification(title, body, color="blue"):
     except Exception as e:
         print(f"잔디 알림 실패: {e}")
         return False
+
+
+def send_email_notification(subject, body_text, html_body=None):
+    """Apps Script 웹 앱을 통한 이메일 알림 발송"""
+    config = load_config()
+    if not config:
+        return False
+    
+    webhook_url = config.get('global_settings', {}).get('email_webhook_url', '')
+    if not webhook_url:
+        print("[EMAIL] email_webhook_url이 설정되지 않음")
+        return False
+    
+    payload = {
+        "subject": subject,
+        "body": body_text,
+    }
+    if html_body:
+        payload["html_body"] = html_body
+    
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            webhook_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        # Apps Script는 302 리다이렉트를 하므로 직접 처리
+        import urllib.request as url_req
+        opener = url_req.build_opener(url_req.HTTPRedirectHandler)
+        with opener.open(req, timeout=30) as response:
+            result = response.read().decode('utf-8')
+            print(f"[EMAIL] 발송 성공: {result[:100]}")
+            return True
+    except Exception as e:
+        print(f"[EMAIL] 발송 실패: {e}")
+        return False
+
+
+def build_auto_check_email(groups_result, checked_at):
+    """자동 체크 결과를 이메일 HTML로 변환"""
+    subject = f"[쿠팡 가격관리] 자동 체크 결과 ({checked_at})"
+    
+    rows = ""
+    for gk, gr in groups_result.items():
+        name = gr.get('name', gk)
+        auto = '🤖 ON' if gr.get('auto_mode') else '⏸️ OFF'
+        crawl = gr.get('crawl', '-')
+        changed = '📊 변동!' if gr.get('price_changed') else '변동 없음'
+        
+        if gr.get('applied'):
+            applied = f"✅ {gr.get('apply_detail', '성공')}"
+            row_color = '#e8f5e9'
+        elif gr.get('auto_mode'):
+            applied = f"❌ {gr.get('apply_error', '실패')}"
+            row_color = '#ffebee'
+        else:
+            applied = '— (auto OFF)'
+            row_color = '#f5f5f5'
+        
+        rows += f"""<tr style="background:{row_color}">
+            <td style="padding:8px;border:1px solid #ddd;font-weight:bold">{name}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:center">{auto}</td>
+            <td style="padding:8px;border:1px solid #ddd">{crawl}</td>
+            <td style="padding:8px;border:1px solid #ddd">{changed}</td>
+            <td style="padding:8px;border:1px solid #ddd">{applied}</td>
+        </tr>"""
+    
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:#1a1a2e;color:white;padding:20px;border-radius:10px 10px 0 0">
+            <h2 style="margin:0">🏷️ 쿠팡 가격관리 자동 체크 결과</h2>
+            <p style="margin:5px 0 0;opacity:0.8">{checked_at}</p>
+        </div>
+        <div style="padding:20px;background:white;border:1px solid #ddd">
+            <table style="width:100%;border-collapse:collapse">
+                <tr style="background:#1a1a2e;color:white">
+                    <th style="padding:10px;text-align:left">그룹</th>
+                    <th style="padding:10px;text-align:center">모드</th>
+                    <th style="padding:10px">크롤링</th>
+                    <th style="padding:10px">가격변동</th>
+                    <th style="padding:10px">쿠폰발행</th>
+                </tr>
+                {rows}
+            </table>
+        </div>
+        <div style="padding:15px;background:#f8f9fa;border-radius:0 0 10px 10px;border:1px solid #ddd;border-top:0;font-size:12px;color:#666">
+            <p>이 메일은 쿠팡 가격관리 시스템에서 자동 발송되었습니다.</p>
+            <p><a href="https://coupang-price-manager-221865276835.asia-northeast3.run.app">관리 대시보드 바로가기</a></p>
+        </div>
+    </div>"""
+    
+    # 텍스트 버전
+    text = f"쿠팡 가격관리 자동 체크 결과 ({checked_at})\n\n"
+    for gk, gr in groups_result.items():
+        name = gr.get('name', gk)
+        text += f"{name}: 크롤링={gr.get('crawl','-')}, 변동={'있음' if gr.get('price_changed') else '없음'}, "
+        text += f"쿠폰={'발행' if gr.get('applied') else 'OFF/실패'}\n"
+    
+    return subject, text, html
 
 
 # ==================== 경쟁사 크롤링 ====================
@@ -3828,10 +3929,18 @@ def auto_check_all():
     
     log_action("AUTO_CHECK_ALL", f"전체 자동 체크 완료: {len(all_results)}개 그룹", all_results)
     
+    # 이메일 알림 발송
+    checked_at = format_kst_datetime()
+    try:
+        subject, text, html = build_auto_check_email(all_results, checked_at)
+        send_email_notification(subject, text, html)
+    except Exception as e:
+        print(f"[AUTO_CHECK_ALL] 이메일 발송 실패: {e}")
+    
     return jsonify({
         "success": True,
         "groups": all_results,
-        "checked_at": format_kst_datetime()
+        "checked_at": checked_at
     })
 
 

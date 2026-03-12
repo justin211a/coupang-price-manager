@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.2"
+APP_VERSION = "33.3"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -1905,6 +1905,116 @@ def sync_group_prices(group_key):
     })
 
 
+# ==================== 쿠폰 정리 ====================
+
+def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
+    """해당 그룹의 기존 쿠폰을 전부 파기 (고정 쿠폰 제외)
+    
+    쿠폰 이름에 group_name 또는 coupon_name이 포함된 것을 찾아서 파기.
+    고정 쿠폰(여러 상품 범용)은 파기하지 않고 blocked로 반환.
+    """
+    if fixed_keywords is None:
+        fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
+    
+    # 상품 관련 키워드 - 이것이 포함되면 특정 상품 전용 쿠폰 (파기 가능)
+    product_keywords = ['레스베라트롤', 'NMN', 'nmn', '프라임', 'PRIME', '닥터스', 'DiGU', '디구',
+                       '멜라토닌', '그로우', '증량']
+    
+    cancelled = []
+    blocked = []
+    
+    coupons_result = api.get_coupons("APPLIED")
+    if not coupons_result.get('success'):
+        return {'cancelled': cancelled, 'blocked': blocked}
+    
+    coupon_data = coupons_result.get('data', {})
+    if isinstance(coupon_data, dict):
+        inner = coupon_data.get('data', {})
+        if isinstance(inner, dict):
+            coupon_list = inner.get('content', [])
+        else:
+            coupon_list = []
+    else:
+        coupon_list = []
+    
+    for coupon in coupon_list:
+        coupon_id = coupon.get('couponId')
+        promo_name = coupon.get('promotionName', '')
+        status = coupon.get('status', '')
+        
+        if not coupon_id or status in ['EXPIRED', 'CANCELLED']:
+            continue
+        
+        # 이 그룹의 쿠폰인지 확인 (그룹명 또는 쿠폰명이 포함)
+        is_group_coupon = False
+        if group_name and group_name in promo_name:
+            is_group_coupon = True
+        if coupon_name and coupon_name.split(' ')[0] in promo_name:
+            # 쿠폰명의 첫 부분(예: "본사이언스 레스베라트롤")이 포함되면 매칭
+            is_group_coupon = True
+        
+        if not is_group_coupon:
+            continue
+        
+        # 고정 쿠폰 판별: 고정 키워드 있고 + 상품 키워드 없으면 → 고정 (파기 불가)
+        has_fixed_kw = any(fk in promo_name for fk in fixed_keywords)
+        has_product_kw = any(pk in promo_name for pk in product_keywords)
+        
+        if has_fixed_kw and not has_product_kw:
+            print(f"[CLEANUP] BLOCKED (fixed): {promo_name} (ID: {coupon_id})")
+            blocked.append({'coupon_id': coupon_id, 'name': promo_name})
+            continue
+        
+        # 파기
+        print(f"[CLEANUP] Cancelling: {promo_name} (ID: {coupon_id})")
+        cancel_result = api.cancel_coupon(coupon_id)
+        if cancel_result.get('success'):
+            cancelled.append({'coupon_id': coupon_id, 'name': promo_name})
+        else:
+            print(f"[CLEANUP] Failed to cancel {coupon_id}: {cancel_result}")
+    
+    return {'cancelled': cancelled, 'blocked': blocked}
+
+
+@app.route('/api/product-groups/<group_key>/cleanup-coupons', methods=['POST'])
+def cleanup_coupons_api(group_key):
+    """특정 그룹의 기존 쿠폰 전부 정리 (수동 호출용)"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    
+    groups = config.get('product_groups', {})
+    if group_key not in groups:
+        return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
+    
+    group = groups[group_key]
+    group_name = group.get('name', '')
+    coupon_name = group.get('coupon_name', f"{group_name} 할인쿠폰")
+    fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
+    
+    api = CoupangAPI(config)
+    result = cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords)
+    
+    cancelled = result.get('cancelled', [])
+    blocked = result.get('blocked', [])
+    
+    log_action("CLEANUP_COUPONS", f"쿠폰 정리: {group_key} ({len(cancelled)}개 파기, {len(blocked)}개 차단)", result)
+    
+    if cancelled:
+        body = "\n".join([f"🗑️ {c['name']} (ID: {c['coupon_id']})" for c in cancelled])
+        if blocked:
+            body += f"\n\n🔒 파기 불가 (고정 쿠폰): {len(blocked)}개"
+        send_jandi_notification(f"🧹 {group_name} 쿠폰 정리 완료", body, "blue")
+    
+    return jsonify({
+        "success": True,
+        "cancelled": cancelled,
+        "blocked": blocked,
+        "cancelled_count": len(cancelled),
+        "blocked_count": len(blocked)
+    })
+
+
 @app.route('/api/product-groups/<group_key>/apply-prices', methods=['POST'])
 def apply_group_prices(group_key):
     """제품 그룹의 1+3+6병 전체 쿠폰 발행 (기존 쿠폰 파기 포함)"""
@@ -1938,11 +2048,26 @@ def apply_group_prices(group_key):
     api = CoupangAPI(config)
     
     # ==================== 고정 쿠폰 키워드 (파기하면 안 되는 것들) ====================
-    fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+    fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원']
     
-    # ==================== Create new coupons (상품별 기존 쿠폰 파기 후 생성) ====================
-    results = []
+    # ==================== 1단계: 해당 그룹의 기존 쿠폰 전부 파기 ====================
     cancelled_coupons = []
+    blocked_coupons = []
+    
+    print(f"[APPLY] Step 1: Cleanup existing coupons for group '{group_name}'")
+    cleanup = cleanup_group_coupons(api, group_name, coupon_name, fixed_coupon_keywords)
+    cancelled_coupons = cleanup.get('cancelled', [])
+    blocked_coupons = cleanup.get('blocked', [])
+    
+    if cancelled_coupons:
+        print(f"[APPLY] Cleaned up {len(cancelled_coupons)} old coupons")
+        time_module.sleep(2)  # 파기 처리 대기
+    
+    if blocked_coupons:
+        print(f"[APPLY] {len(blocked_coupons)} coupons blocked by fixed coupons")
+    
+    # ==================== 2단계: 새 쿠폰 발행 ====================
+    results = []
     
     # 1bottle, 3bottle, 6bottle
     product_configs = [
@@ -1960,45 +2085,6 @@ def apply_group_prices(group_key):
         original_price = product.get('original_price', 0)
         min_price = product.get('min_price', 0)
         max_price = product.get('max_price', 999999)
-        
-        # ★★★ 핵심: 이 상품에 연결된 기존 쿠폰 먼저 파기 ★★★
-        print(f"[APPLY] Checking existing coupons for {product_key} (vendorItemId: {vendor_item_id})")
-        cancel_info = api.cancel_coupons_for_item(vendor_item_id, fixed_coupon_keywords)
-        
-        item_cancelled = cancel_info.get('cancelled', [])
-        item_blocked = cancel_info.get('blocked', [])
-        
-        if item_cancelled:
-            cancelled_coupons.extend(item_cancelled)
-            print(f"[APPLY] Cancelled {len(item_cancelled)} coupons for {product_key}")
-            time_module.sleep(2)
-        
-        # 고정 쿠폰에 차단된 경우 → 이 상품은 스킵, 잔디 알림
-        if item_blocked:
-            blocked_names = ', '.join([b['name'] for b in item_blocked])
-            product_name = product.get('name', product_key)
-            print(f"[APPLY] BLOCKED: {product_key} is locked by fixed coupon(s): {blocked_names}")
-            
-            results.append({
-                "product": product_name,
-                "vendor_item_id": vendor_item_id,
-                "success": False,
-                "error": f"고정 쿠폰에 묶여있어 자동 발행 불가",
-                "blocked_by": item_blocked
-            })
-            
-            # 잔디 알림: 수동 조치 필요
-            send_jandi_notification(
-                "⚠️ [수동 조치 필요] 쿠폰 상품 해제",
-                f"📦 {group_name} - {product_name}\n\n"
-                f"해당 상품(vendorItemId: {vendor_item_id})이 고정 쿠폰에 묶여있어 "
-                f"새 할인쿠폰 연결이 불가합니다.\n\n"
-                f"🔒 차단 쿠폰: {blocked_names}\n\n"
-                f"👉 쿠팡 WING에서 해당 쿠폰의 상품 목록에서 이 상품을 수동 해제해주세요.\n"
-                f"해제 후 다시 가격 적용하면 정상 작동합니다.",
-                "red"
-            )
-            continue
         
         if not original_price:
             results.append({
@@ -2104,6 +2190,7 @@ def apply_group_prices(group_key):
         "success": True,
         "results": results,
         "cancelled_coupons": cancelled_coupons,
+        "blocked_coupons": blocked_coupons,
         "applied_at": format_kst_datetime()
     })
 

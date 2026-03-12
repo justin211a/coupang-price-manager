@@ -4,16 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>쿠팡 가격 경쟁 관리 v33</title>
-    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHBhdGggZmlsbD0iI2Y5NzMxNiIgZD0iTTIgMkgzMFYzMEgyMlYyNkgxOFYzMEgxNFYyNkgxMFYzMEgyWiIvPjxyZWN0IHg9IjgiIHk9IjEwIiB3aWR0aD0iNSIgaGVpZ2h0PSI1IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIvPjxyZWN0IHg9IjE5IiB5PSIxMCIgd2lkdGg9IjUiIGhlaWdodD0iNSIgcng9IjEiIGZpbGw9IiMxYTFhMmUiLz48cmVjdCB4PSIyIiB5PSIxNiIgd2lkdGg9IjQiIGhlaWdodD0iNiIgcng9IjEiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii43Ii8+PHJlY3QgeD0iMjYiIHk9IjE2IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIgb3BhY2l0eT0iLjciLz48cmVjdCB4PSIxNCIgeT0iMjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii44Ii8+PC9zdmc+">
+    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path fill='%23f97316' d='M2 2H30V30H22V26H18V30H14V26H10V30H2Z'/><rect x='14' y='0' width='4' height='4' fill='%23fbbf24'/><circle cx='11' cy='13' r='4' fill='%231a1a2e'/><circle cx='12' cy='12' r='1.5' fill='white'/><circle cx='21' cy='13' r='4' fill='%231a1a2e'/><circle cx='22' cy='12' r='1.5' fill='white'/><rect x='12' y='20' width='8' height='2' rx='1' fill='%231a1a2e' opacity='.5'/><rect x='0' y='14' width='4' height='8' rx='2' fill='%23ea580c'/><rect x='28' y='14' width='4' height='8' rx='2' fill='%23ea580c'/></svg>">
     <script>
-    // 파비콘 애니메이션: 사각형 ↔ 로봇
-    const FAV_SQUARE = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iI2Y5NzMxNiIvPjwvc3ZnPg==";
-    const FAV_ROBOT = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHBhdGggZmlsbD0iI2Y5NzMxNiIgZD0iTTIgMkgzMFYzMEgyMlYyNkgxOFYzMEgxNFYyNkgxMFYzMEgyWiIvPjxyZWN0IHg9IjgiIHk9IjEwIiB3aWR0aD0iNSIgaGVpZ2h0PSI1IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIvPjxyZWN0IHg9IjE5IiB5PSIxMCIgd2lkdGg9IjUiIGhlaWdodD0iNSIgcng9IjEiIGZpbGw9IiMxYTFhMmUiLz48cmVjdCB4PSIyIiB5PSIxNiIgd2lkdGg9IjQiIGhlaWdodD0iNiIgcng9IjEiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii43Ii8+PHJlY3QgeD0iMjYiIHk9IjE2IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIgb3BhY2l0eT0iLjciLz48cmVjdCB4PSIxNCIgeT0iMjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii44Ii8+PC9zdmc+";
-    let favState = true;
+    // 로봇 눈알 애니메이션 - 정면→깜빡→왼쪽→아래→오른쪽→위→정면→깜빡 순환
+    const _F = (lx,ly,rx,ry) => {
+      const s = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path fill='%23f97316' d='M2 2H30V30H22V26H18V30H14V26H10V30H2Z'/><rect x='14' y='0' width='4' height='4' fill='%23fbbf24'/><circle cx='11' cy='13' r='4' fill='%231a1a2e'/><circle cx='${lx}' cy='${ly}' r='1.5' fill='white' opacity='.9'/><circle cx='21' cy='13' r='4' fill='%231a1a2e'/><circle cx='${rx}' cy='${ry}' r='1.5' fill='white' opacity='.9'/><rect x='12' y='20' width='8' height='2' rx='1' fill='%231a1a2e' opacity='.5'/><rect x='0' y='14' width='4' height='8' rx='2' fill='%23ea580c'/><rect x='28' y='14' width='4' height='8' rx='2' fill='%23ea580c'/></svg>`;
+      return "data:image/svg+xml," + s;
+    };
+    const _BLINK = "data:image/svg+xml," + `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path fill='%23f97316' d='M2 2H30V30H22V26H18V30H14V26H10V30H2Z'/><rect x='14' y='0' width='4' height='4' fill='%23fbbf24'/><circle cx='11' cy='13' r='4' fill='%231a1a2e'/><rect x='7' y='12' width='8' height='2' rx='1' fill='%231a1a2e'/><circle cx='21' cy='13' r='4' fill='%231a1a2e'/><rect x='17' y='12' width='8' height='2' rx='1' fill='%231a1a2e'/><rect x='12' y='20' width='8' height='2' rx='1' fill='%231a1a2e' opacity='.5'/><rect x='0' y='14' width='4' height='8' rx='2' fill='%23ea580c'/><rect x='28' y='14' width='4' height='8' rx='2' fill='%23ea580c'/></svg>`;
+    const EYES = [
+      _F(12,12,22,12), _F(12,12,22,12), _F(12,12,22,12), _F(12,12,22,12),
+      _F(12,12,22,12), _F(12,12,22,12), _BLINK, _F(12,12,22,12),
+      _F(10,12,20,12), _F(9.5,13,19.5,13), _F(12,14,22,14),
+      _F(13.5,13,23.5,13), _F(14,12,24,12), _F(13.5,11,23.5,11),
+      _F(12,10.5,22,10.5), _F(10.5,11,20.5,11), _F(12,12,22,12),
+      _BLINK, _F(12,12,22,12), _F(12,12,22,12), _F(12,12,22,12),
+    ];
+    let _fi = 0;
     setInterval(() => {
-        document.getElementById('favicon').href = favState ? FAV_SQUARE : FAV_ROBOT;
-        favState = !favState;
-    }, 1500);
+        document.getElementById('favicon').href = EYES[_fi];
+        _fi = (_fi + 1) % EYES.length;
+    }, 200);
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>

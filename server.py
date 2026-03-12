@@ -997,29 +997,36 @@ def crawl_coupang_price(url):
     try:
         import requests as http_req
         
-        # ScraperAPI를 통한 쿠팡 페이지 조회 (params로 전달해야 URL이 올바르게 인코딩됨)
-        max_retries = 2
+        # ScraperAPI를 통한 쿠팡 페이지 조회
+        # 1차: 일반 요청 (1크레딧), 실패 시 2차: premium (10크레딧)
         response = None
+        used_premium = False
         
-        for attempt in range(max_retries + 1):
+        for mode in ['normal', 'premium']:
+            params = {
+                "api_key": scraper_api_key,
+                "url": url,
+                "country_code": "kr"
+            }
+            if mode == 'premium':
+                params["premium"] = "true"
+                print(f"[CRAWL] Retrying with premium=true...")
+            
             try:
                 response = http_req.get(
                     "https://api.scraperapi.com",
-                    params={
-                        "api_key": scraper_api_key,
-                        "url": url,
-                        "country_code": "kr"
-                    },
+                    params=params,
                     timeout=90
                 )
-                if response.status_code == 200:
+                if response.status_code == 200 and len(response.text) > 1000:
+                    used_premium = (mode == 'premium')
                     break
-                print(f"[CRAWL] Attempt {attempt+1}: ScraperAPI returned {response.status_code}")
+                print(f"[CRAWL] {mode}: ScraperAPI returned {response.status_code} (len:{len(response.text)})")
             except Exception as retry_err:
-                print(f"[CRAWL] Attempt {attempt+1} failed: {retry_err}")
+                print(f"[CRAWL] {mode} failed: {retry_err}")
             
-            if attempt < max_retries:
-                time_module.sleep(3)
+            if mode == 'normal':
+                time_module.sleep(2)
         
         if not response or response.status_code != 200:
             return {"success": False, "error": f"ScraperAPI 응답: {response.status_code if response else 'no response'}", "url": url}

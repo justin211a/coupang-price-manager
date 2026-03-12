@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.11"
+APP_VERSION = "32.12"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -664,6 +664,69 @@ class CoupangAPI:
     def get_coupon_list(self, status="APPLIED"):
         """활성 쿠폰 목록 (간편 조회)"""
         return self.get_coupons(status)
+    
+    def get_coupons_by_vendor_item(self, vendor_item_id):
+        """특정 상품(vendorItemId)에 연결된 쿠폰 조회"""
+        # API: GET /v2/providers/fms/apis/api/v1/vendors/{vendorId}/coupons/items/{vendorItemId}
+        path = f"/v2/providers/fms/apis/api/v1/vendors/{self.vendor_id}/coupons/items/{vendor_item_id}"
+        result = self._request("GET", path)
+        print(f"[ITEM_COUPONS] vendorItemId={vendor_item_id}, result: {result}")
+        return result
+    
+    def cancel_coupons_for_item(self, vendor_item_id, fixed_keywords=None):
+        """특정 상품에 연결된 모든 쿠폰 파기 (고정 쿠폰 제외)"""
+        if fixed_keywords is None:
+            fixed_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+        
+        cancelled = []
+        result = self.get_coupons_by_vendor_item(vendor_item_id)
+        
+        if not result.get('success'):
+            print(f"[CANCEL_FOR_ITEM] Failed to get coupons for {vendor_item_id}")
+            return cancelled
+        
+        # 응답 구조 파싱
+        response_data = result.get('data', {})
+        coupon_list = []
+        
+        if isinstance(response_data, dict):
+            inner_data = response_data.get('data', {})
+            if isinstance(inner_data, dict):
+                content = inner_data.get('content', [])
+                if isinstance(content, list):
+                    coupon_list = content
+                elif isinstance(content, dict):
+                    # 단건 응답인 경우
+                    coupon_list = [content]
+        
+        for coupon in coupon_list:
+            coupon_id = coupon.get('couponId')
+            promo_name = coupon.get('promotionName', '')
+            status = coupon.get('status', '')
+            
+            if not coupon_id:
+                continue
+            
+            # 고정 쿠폰은 제외
+            if any(kw in promo_name for kw in fixed_keywords):
+                print(f"[CANCEL_FOR_ITEM] Skip fixed coupon: {promo_name} (ID: {coupon_id})")
+                continue
+            
+            # 이미 파기된 쿠폰은 스킵
+            if status in ['EXPIRED', 'CANCELLED']:
+                print(f"[CANCEL_FOR_ITEM] Already cancelled: {coupon_id} ({status})")
+                continue
+            
+            print(f"[CANCEL_FOR_ITEM] Cancelling: {promo_name} (ID: {coupon_id}, status: {status})")
+            cancel_result = self.cancel_coupon(coupon_id)
+            
+            if cancel_result.get('success'):
+                cancelled.append(coupon_id)
+                print(f"[CANCEL_FOR_ITEM] Cancelled: {coupon_id}")
+            else:
+                print(f"[CANCEL_FOR_ITEM] Failed to cancel {coupon_id}: {cancel_result}")
+        
+        return cancelled
 
 
 # ==================== 잔디 알림 ====================
@@ -1780,59 +1843,12 @@ def apply_group_prices(group_key):
     
     api = CoupangAPI(config)
     
-    # ==================== 기존 쿠폰 파기 ====================
-    # 고정 쿠폰 키워드 (파기하면 안 되는 것들)
+    # ==================== 고정 쿠폰 키워드 (파기하면 안 되는 것들) ====================
     fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
     
-    # 해당 제품 그룹 식별 키워드 (쿠폰명에서 검색)
-    group_keywords = [group_name]
-    if group_key == 'prime_nmn':
-        group_keywords.extend(['NMN', 'nmn', '프라임'])
-    elif group_key == 'resveratrol':
-        group_keywords.extend(['레스베라트롤', 'resveratrol'])
-    
-    cancelled_coupons = []
-    coupons_result = api.get_coupons("APPLIED")
-    
-    if coupons_result.get('success'):
-        coupon_data = coupons_result.get('data', {})
-        if isinstance(coupon_data, dict):
-            inner_data = coupon_data.get('data', {})
-            if isinstance(inner_data, dict):
-                coupon_list = inner_data.get('content', [])
-            else:
-                coupon_list = []
-        else:
-            coupon_list = []
-        
-        for coupon in coupon_list:
-            promo_name = coupon.get('promotionName', '')
-            coupon_id = coupon.get('couponId')
-            discount = coupon.get('discount', 0)
-            
-            # 고정 쿠폰은 제외
-            if any(kw in promo_name for kw in fixed_coupon_keywords):
-                continue
-            
-            # 해당 제품 그룹 쿠폰인지 확인
-            is_group_coupon = any(kw in promo_name for kw in group_keywords)
-            
-            if is_group_coupon and coupon_id:
-                print(f"[쿠폰 파기] 대상 발견: {promo_name} (ID: {coupon_id}, {int(discount):,}원)")
-                cancel_result = api.cancel_coupon(coupon_id)
-                if cancel_result.get('success'):
-                    cancelled_coupons.append(f"{promo_name} (ID: {coupon_id})")
-                    log_action("COUPON_CANCEL", f"기존 쿠폰 파기: {promo_name} ({group_key})")
-                else:
-                    log_action("COUPON_CANCEL_FAIL", f"Coupon cancel failed: {coupon_id}", cancel_result)
-    
-    if cancelled_coupons:
-        print(f"[CANCEL] {len(cancelled_coupons)} coupons cancelled")
-        # Short delay after cancellation
-        time_module.sleep(5)
-    
-    # ==================== Create new coupons ====================
+    # ==================== Create new coupons (상품별 기존 쿠폰 파기 후 생성) ====================
     results = []
+    cancelled_coupons = []
     
     # 1bottle, 3bottle, 6bottle
     product_configs = [
@@ -1850,6 +1866,15 @@ def apply_group_prices(group_key):
         original_price = product.get('original_price', 0)
         min_price = product.get('min_price', 0)
         max_price = product.get('max_price', 999999)
+        
+        # ★★★ 핵심: 이 상품에 연결된 기존 쿠폰 먼저 파기 ★★★
+        print(f"[APPLY] Checking existing coupons for {product_key} (vendorItemId: {vendor_item_id})")
+        item_cancelled = api.cancel_coupons_for_item(vendor_item_id, fixed_coupon_keywords)
+        if item_cancelled:
+            cancelled_coupons.extend(item_cancelled)
+            print(f"[APPLY] Cancelled {len(item_cancelled)} coupons for {product_key}")
+            # 파기 후 잠시 대기
+            time_module.sleep(2)
         
         if not original_price:
             results.append({

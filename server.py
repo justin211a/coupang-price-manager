@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.4"
+APP_VERSION = "33.5"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -882,61 +882,61 @@ def send_jandi_notification(title, body, color="blue"):
 # ==================== 경쟁사 크롤링 ====================
 
 def crawl_coupang_price(url):
-    """쿠팡 상품 페이지에서 가격 크롤링
+    """쿠팡 상품 페이지에서 가격 크롤링 (ScraperAPI 경유)
     
     Returns:
         dict: {success: bool, price: int, name: str, error: str}
     """
-    if not HAS_CRAWLING:
-        return {"success": False, "error": "크롤링 라이브러리 미설치"}
+    config = load_config()
+    scraper_api_key = config.get('global_settings', {}).get('scraper_api_key', '') if config else ''
+    
+    if not scraper_api_key:
+        return {"success": False, "error": "ScraperAPI 키가 설정되지 않음. config > global_settings > scraper_api_key"}
     
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        }
+        import requests as http_req
         
-        response = http_requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
+        # ScraperAPI를 통한 쿠팡 페이지 조회
+        api_url = f"https://api.scraperapi.com?api_key={scraper_api_key}&url={url}&country_code=kr"
         
-        soup = BeautifulSoup(response.text, 'lxml')
+        response = http_req.get(api_url, timeout=90)
         
-        # 가격 추출 시도 (여러 선택자)
+        if response.status_code != 200:
+            return {"success": False, "error": f"ScraperAPI 응답: {response.status_code}", "url": url}
+        
+        if len(response.text) < 1000:
+            return {"success": False, "error": "페이지 내용이 너무 짧음 (차단 가능성)", "url": url}
+        
+        # 가격 추출 - final-price-amount 클래스 (쿠팡 2026년 구조)
         price = None
+        name = ""
         
-        # 방법 1: prod-sale-price 클래스
-        price_el = soup.select_one('.prod-sale-price .total-price')
-        if price_el:
-            price_text = price_el.get_text(strip=True)
-            price = int(re.sub(r'[^\d]', '', price_text))
+        # 방법 1: final-price-amount 클래스 (최우선)
+        match = re.search(r'final-price-amount[^>]*>(\d{1,3}(?:,\d{3})+)원', response.text)
+        if match:
+            price = int(match.group(1).replace(',', ''))
         
-        # 방법 2: prod-coupon-price 클래스 (쿠폰 적용가)
+        # 방법 2: prod-sale-price (구 구조)
         if not price:
-            price_el = soup.select_one('.prod-coupon-price .total-price')
-            if price_el:
-                price_text = price_el.get_text(strip=True)
-                price = int(re.sub(r'[^\d]', '', price_text))
-        
-        # 방법 3: 정규식으로 가격 패턴 찾기
-        if not price:
-            price_pattern = r'"salePrice"\s*:\s*(\d+)'
-            match = re.search(price_pattern, response.text)
+            match = re.search(r'prod-sale-price[^>]*total-price[^>]*>(\d{1,3}(?:,\d{3})+)', response.text)
             if match:
-                price = int(match.group(1))
+                price = int(match.group(1).replace(',', ''))
         
-        # 방법 4: total-price 클래스
+        # 방법 3: 정규식 가격 패턴 (첫 번째 만원 이상 가격)
         if not price:
-            price_el = soup.select_one('.total-price strong')
-            if price_el:
-                price_text = price_el.get_text(strip=True)
-                price = int(re.sub(r'[^\d]', '', price_text))
+            all_prices = re.findall(r'(\d{1,3}(?:,\d{3})+)원', response.text[:50000])
+            for p in all_prices:
+                val = int(p.replace(',', ''))
+                if 5000 < val < 500000:
+                    price = val
+                    break
         
         # 상품명 추출
-        name = ""
-        title_el = soup.select_one('.prod-buy-header__title')
-        if title_el:
-            name = title_el.get_text(strip=True)
+        title_match = re.search(r'<title[^>]*>([^<]+)</title>', response.text)
+        if title_match:
+            name = title_match.group(1).strip()
+            # " - 쿠팡!" 제거
+            name = re.sub(r'\s*[-|]\s*쿠팡!?\s*$', '', name)
         
         if price:
             return {
@@ -952,10 +952,6 @@ def crawl_coupang_price(url):
                 "url": url
             }
     
-    except http_requests.exceptions.Timeout:
-        return {"success": False, "error": "요청 시간 초과", "url": url}
-    except http_requests.exceptions.RequestException as e:
-        return {"success": False, "error": f"요청 실패: {str(e)}", "url": url}
     except Exception as e:
         return {"success": False, "error": f"크롤링 오류: {str(e)}", "url": url}
 
@@ -1783,6 +1779,12 @@ def crawl_competitors(group_key):
         return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
     
     group = groups[group_key]
+    
+    # 크롤링 전 기존 가격 저장
+    old_prices = {}
+    for comp in group.get('competitors', []):
+        old_prices[comp.get('id', '')] = comp.get('last_price', 0)
+    
     results = crawl_competitor_prices(group)
     
     # config에 업데이트된 가격 저장
@@ -1790,11 +1792,46 @@ def crawl_competitors(group_key):
     
     success_count = sum(1 for r in results if r['success'])
     
-    log_action("CRAWL", f"경쟁사 크롤링: {success_count}/{len(results)}개 성공 ({group_key})")
+    # 가격 변동 감지
+    price_changes = []
+    for r in results:
+        if r['success']:
+            comp_id = r.get('competitor_id', '')
+            old_price = old_prices.get(comp_id, 0)
+            new_price = r.get('price', 0)
+            if old_price > 0 and new_price != old_price:
+                change_pct = round((new_price - old_price) / old_price * 100, 1)
+                price_changes.append({
+                    'name': r.get('competitor_name', ''),
+                    'old': old_price,
+                    'new': new_price,
+                    'change': change_pct
+                })
+    
+    # 가격 변동 시 잔디 알림
+    if price_changes:
+        group_name = group.get('name', group_key)
+        body = "\n".join([
+            f"{'📈' if c['change'] > 0 else '📉'} {c['name']}: {c['old']:,}원 → {c['new']:,}원 ({c['change']:+.1f}%)"
+            for c in price_changes
+        ])
+        
+        if group.get('auto_mode'):
+            body += "\n\n🤖 auto_mode ON → 자동 가격 재조정 진행합니다."
+        
+        send_jandi_notification(
+            f"🔍 [{group_name}] 경쟁사 가격 변동 감지!",
+            body,
+            "yellow"
+        )
+    
+    log_action("CRAWL", f"경쟁사 크롤링: {success_count}/{len(results)}개 성공 ({group_key})" + 
+               (f", 가격 변동: {len(price_changes)}건" if price_changes else ""))
     
     return jsonify({
         "success": True,
         "results": results,
+        "price_changes": price_changes,
         "crawled_at": format_kst_datetime()
     })
 
@@ -3693,6 +3730,108 @@ def generate_ai_insight(group_key):
         "insight": result,
         "generated_at": format_kst_datetime(),
         "next_available": "내일 00:00"
+    })
+
+
+# ==================== 전체 자동화 ====================
+
+@app.route('/api/auto-check-all', methods=['GET', 'POST'])
+def auto_check_all():
+    """전체 자동화 엔드포인트 (Cloud Scheduler 2시간마다 호출)
+    
+    각 그룹별로:
+    1. 경쟁사 가격 크롤링 (ScraperAPI)
+    2. 가격 변동 감지 → 잔디 알림
+    3. auto_mode ON인 그룹 → 쿠폰 자동 재발행
+    
+    Cloud Scheduler 설정:
+    - URL: https://coupang-price-manager-xxx.run.app/api/auto-check-all
+    - Method: POST
+    - Frequency: 0 */2 9-22 * * (09~22시, 2시간마다)
+    """
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다", "executed": False}), 404
+    
+    groups = config.get('product_groups', {})
+    all_results = {}
+    
+    for group_key, group in groups.items():
+        if not group.get('enabled', True):
+            continue
+        
+        group_name = group.get('name', group_key)
+        group_result = {
+            'name': group_name,
+            'auto_mode': group.get('auto_mode', False),
+            'crawl': None,
+            'price_changed': False,
+            'applied': False,
+        }
+        
+        # 1단계: 경쟁사 크롤링
+        competitors = group.get('competitors', [])
+        if not competitors:
+            group_result['crawl'] = 'no competitors'
+            all_results[group_key] = group_result
+            continue
+        
+        old_prices = {c.get('id', ''): c.get('last_price', 0) for c in competitors}
+        
+        crawl_results = crawl_competitor_prices(group)
+        save_config(config)  # 크롤링 결과 저장
+        
+        success_count = sum(1 for r in crawl_results if r['success'])
+        group_result['crawl'] = f"{success_count}/{len(crawl_results)} success"
+        
+        # 가격 변동 확인
+        for r in crawl_results:
+            if r['success']:
+                comp_id = r.get('competitor_id', '')
+                old_price = old_prices.get(comp_id, 0)
+                new_price = r.get('price', 0)
+                if old_price > 0 and new_price != old_price:
+                    group_result['price_changed'] = True
+                    change_pct = round((new_price - old_price) / old_price * 100, 1)
+                    
+                    send_jandi_notification(
+                        f"🔍 [{group_name}] 경쟁사 가격 변동!",
+                        f"{r.get('competitor_name','')}: {old_price:,}원 → {new_price:,}원 ({change_pct:+.1f}%)",
+                        "yellow"
+                    )
+        
+        # 2단계: auto_mode ON이면 쿠폰 재발행
+        if group.get('auto_mode'):
+            try:
+                with app.test_request_context():
+                    apply_response = apply_group_prices(group_key)
+                    # Flask Response에서 JSON 추출
+                    if hasattr(apply_response, 'get_json'):
+                        apply_data = apply_response.get_json()
+                    else:
+                        apply_data = apply_response
+                    
+                    apply_success = apply_data.get('success', False) if isinstance(apply_data, dict) else False
+                    group_result['applied'] = apply_success
+                    
+                    if apply_success:
+                        results_data = apply_data.get('results', [])
+                        ok = sum(1 for r in results_data if r.get('success'))
+                        group_result['apply_detail'] = f"{ok}/{len(results_data)} coupons issued"
+                    
+            except Exception as e:
+                group_result['applied'] = False
+                group_result['apply_error'] = str(e)
+                log_action("AUTO_CHECK_ERROR", f"자동 재발행 실패 ({group_key}): {str(e)}")
+        
+        all_results[group_key] = group_result
+    
+    log_action("AUTO_CHECK_ALL", f"전체 자동 체크 완료: {len(all_results)}개 그룹", all_results)
+    
+    return jsonify({
+        "success": True,
+        "groups": all_results,
+        "checked_at": format_kst_datetime()
     })
 
 

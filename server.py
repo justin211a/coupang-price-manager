@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.1"
+APP_VERSION = "33.2"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -595,10 +595,17 @@ class CoupangAPI:
         return result
     
     def _is_fixed_coupon(self, coupon_id):
-        """고정 쿠폰 여부 확인 (이름 기반)"""
-        fixed_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+        """고정 쿠폰 여부 확인
         
-        # 쿠폰 목록에서 해당 쿠폰 찾기
+        고정 쿠폰: "본사이언스 2천원 할인쿠폰" 등 (여러 상품에 범용 적용, 상품명 없음)
+        자동 쿠폰: "본사이언스 레스베라트롤 할인쿠폰 14,100원" 등 (특정 상품 전용, 상품명 있음)
+        
+        판별 기준: 쿠폰명에 상품 관련 키워드가 있으면 자동(파기 가능), 없으면 고정(파기 불가)
+        """
+        fixed_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+        product_keywords = ['레스베라트롤', 'NMN', 'nmn', '프라임', 'PRIME', '닥터스', 'DiGU', '디구',
+                           '멜라토닌', '피크하이트', '그로우', '증량']
+        
         coupons_result = self.get_coupons("APPLIED")
         if not coupons_result.get('success'):
             return False
@@ -616,18 +623,22 @@ class CoupangAPI:
         for c in coupon_list:
             if c.get('couponId') == coupon_id:
                 name = c.get('promotionName', '')
-                # 이름에 고정 키워드가 있더라도, 그룹 자동쿠폰이면 고정 아님
-                # 예: "본사이언스 레스베라트롤 할인쿠폰 14,100원" → 고정 아님
-                # 예: "본사이언스 2천원 할인쿠폰" → 고정
-                # 판별: "할인쿠폰 N원" 패턴이면 자동쿠폰, "N천원/N만원 할인쿠폰"이면 고정
-                import re
-                if re.search(r'할인쿠폰\s*[\d,]+원', name):
-                    # "할인쿠폰 14,100원" 패턴 → 자동 생성 쿠폰
+                
+                # 상품 관련 키워드가 있으면 → 특정 상품 전용 쿠폰 → 고정 아님 (파기 가능)
+                if any(pk in name for pk in product_keywords):
+                    print(f"[FIXED_CHECK] {coupon_id} '{name}' → product keyword found → NOT fixed (can cancel)")
                     return False
-                if any(kw in name for kw in fixed_keywords):
+                
+                # 상품 키워드 없고 고정 키워드 있으면 → 고정 쿠폰 (파기 불가)
+                if any(fk in name for fk in fixed_keywords):
+                    print(f"[FIXED_CHECK] {coupon_id} '{name}' → fixed keyword found, no product keyword → FIXED")
                     return True
+                
+                # 어느 쪽에도 안 걸리면 → 안전하게 고정 아님
+                print(f"[FIXED_CHECK] {coupon_id} '{name}' → no match → NOT fixed")
                 return False
         
+        print(f"[FIXED_CHECK] {coupon_id} not found in coupon list → NOT fixed")
         return False
     
     def add_coupon_items(self, coupon_id, vendor_item_ids):

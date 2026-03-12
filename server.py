@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.7"
+APP_VERSION = "33.8"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -996,37 +996,28 @@ def crawl_coupang_price(url):
     
     try:
         import requests as http_req
+        from urllib.parse import urlparse, urlunparse
         
-        # ScraperAPI를 통한 쿠팡 페이지 조회
-        # 1차: 일반 요청 (1크레딧), 실패 시 2차: premium (10크레딧)
+        # URL 정리: query 파라미터 제거 (ScraperAPI가 쿠팡 URL에 params 있으면 실패)
+        parsed = urlparse(url)
+        clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+        print(f"[CRAWL] URL: {clean_url}")
+        
+        # ScraperAPI 호출 (1크레딧)
         response = None
-        used_premium = False
         
-        for mode in ['normal', 'premium']:
-            params = {
-                "api_key": scraper_api_key,
-                "url": url,
-                "country_code": "kr"
-            }
-            if mode == 'premium':
-                params["premium"] = "true"
-                print(f"[CRAWL] Retrying with premium=true...")
-            
-            try:
-                response = http_req.get(
-                    "https://api.scraperapi.com",
-                    params=params,
-                    timeout=90
-                )
-                if response.status_code == 200 and len(response.text) > 1000:
-                    used_premium = (mode == 'premium')
-                    break
-                print(f"[CRAWL] {mode}: ScraperAPI returned {response.status_code} (len:{len(response.text)})")
-            except Exception as retry_err:
-                print(f"[CRAWL] {mode} failed: {retry_err}")
-            
-            if mode == 'normal':
-                time_module.sleep(2)
+        try:
+            response = http_req.get(
+                "https://api.scraperapi.com",
+                params={
+                    "api_key": scraper_api_key,
+                    "url": clean_url,
+                    "country_code": "kr"
+                },
+                timeout=90
+            )
+        except Exception as req_err:
+            print(f"[CRAWL] Request failed: {req_err}")
         
         if not response or response.status_code != 200:
             return {"success": False, "error": f"ScraperAPI 응답: {response.status_code if response else 'no response'}", "url": url}

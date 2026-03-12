@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "32.12"
+APP_VERSION = "33.0"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -523,38 +523,16 @@ class CoupangAPI:
                         result['error_detail'] = error_msg
                         return result
         
-        # 쿠폰 생성 완료 확인 후 상품 추가 API 호출
+        # 쿠폰 생성 완료 확인 → v2 API에서 vendorItemIds를 포함해 생성했으므로 상품 자동 연결됨
+        # (별도 add_coupon_items 호출 불필요 - 이중 호출 시 [CIR08] 에러 발생)
         if coupon_id:
-            print(f"[COUPON] Created! couponId: {coupon_id}")
-            
-            # Add items to coupon (separate API call)
-            print(f"[COUPON] Adding items: {vendor_item_ids_list}")
-            add_result = self.add_coupon_items(coupon_id, vendor_item_ids_list)
-            
-            print(f"[COUPON] add_result: {add_result}")
-            
-            # Check if items were actually added
-            is_success = add_result.get('success', False)
-            item_confirmed = add_result.get('item_add_confirmed', False)
-            item_failed = add_result.get('item_add_failed', False)
-            
-            if item_confirmed:
-                print(f"[COUPON] Items added CONFIRMED!")
-                result['items_added'] = True
-            elif item_failed:
-                print(f"[COUPON] Items add FAILED!")
-                result['items_added'] = False
-                result['items_add_error'] = add_result
-            elif is_success:
-                # API call succeeded but no confirmation yet
-                print(f"[COUPON] Items API OK, but not confirmed (async)")
-                result['items_added'] = True  # Assume success
-            else:
-                print(f"[COUPON] Items add FAILED (API error)")
-                result['items_added'] = False
-                result['items_add_error'] = add_result
-            
+            print(f"[COUPON] Created! couponId: {coupon_id} (items auto-linked via v2 API)")
+            result['items_added'] = True
             result['coupon_id'] = coupon_id
+        else:
+            print(f"[COUPON] Warning: coupon created but couponId not confirmed (requestedId: {requested_id})")
+            # requestedId만 있고 couponId를 못 가져온 경우 - 비동기 처리 중일 수 있음
+            result['items_added'] = False
         
         result['requested_id'] = requested_id
         return result
@@ -674,16 +652,24 @@ class CoupangAPI:
         return result
     
     def cancel_coupons_for_item(self, vendor_item_id, fixed_keywords=None):
-        """특정 상품에 연결된 모든 쿠폰 파기 (고정 쿠폰 제외)"""
+        """특정 상품에 연결된 모든 쿠폰 파기 (고정 쿠폰은 파기 불가 알림)
+        
+        Returns:
+            dict: {
+                'cancelled': [파기된 coupon_id 리스트],
+                'blocked': [{'coupon_id':..., 'name':..., 'reason':...}]  # 고정 쿠폰으로 차단된 목록
+            }
+        """
         if fixed_keywords is None:
             fixed_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
         
         cancelled = []
+        blocked = []
         result = self.get_coupons_by_vendor_item(vendor_item_id)
         
         if not result.get('success'):
             print(f"[CANCEL_FOR_ITEM] Failed to get coupons for {vendor_item_id}")
-            return cancelled
+            return {'cancelled': cancelled, 'blocked': blocked}
         
         # 응답 구조 파싱
         response_data = result.get('data', {})
@@ -696,7 +682,6 @@ class CoupangAPI:
                 if isinstance(content, list):
                     coupon_list = content
                 elif isinstance(content, dict):
-                    # 단건 응답인 경우
                     coupon_list = [content]
         
         for coupon in coupon_list:
@@ -707,14 +692,19 @@ class CoupangAPI:
             if not coupon_id:
                 continue
             
-            # 고정 쿠폰은 제외
-            if any(kw in promo_name for kw in fixed_keywords):
-                print(f"[CANCEL_FOR_ITEM] Skip fixed coupon: {promo_name} (ID: {coupon_id})")
-                continue
-            
             # 이미 파기된 쿠폰은 스킵
             if status in ['EXPIRED', 'CANCELLED']:
-                print(f"[CANCEL_FOR_ITEM] Already cancelled: {coupon_id} ({status})")
+                print(f"[CANCEL_FOR_ITEM] Already expired: {coupon_id} ({status})")
+                continue
+            
+            # 고정 쿠폰 → 파기 불가, blocked 목록에 추가
+            if any(kw in promo_name for kw in fixed_keywords):
+                print(f"[CANCEL_FOR_ITEM] BLOCKED by fixed coupon: {promo_name} (ID: {coupon_id})")
+                blocked.append({
+                    'coupon_id': coupon_id,
+                    'name': promo_name,
+                    'reason': f"고정 쿠폰 '{promo_name}'에 묶여있음. WING에서 수동 해제 필요."
+                })
                 continue
             
             print(f"[CANCEL_FOR_ITEM] Cancelling: {promo_name} (ID: {coupon_id}, status: {status})")
@@ -726,7 +716,7 @@ class CoupangAPI:
             else:
                 print(f"[CANCEL_FOR_ITEM] Failed to cancel {coupon_id}: {cancel_result}")
         
-        return cancelled
+        return {'cancelled': cancelled, 'blocked': blocked}
 
 
 # ==================== 잔디 알림 ====================
@@ -1869,12 +1859,42 @@ def apply_group_prices(group_key):
         
         # ★★★ 핵심: 이 상품에 연결된 기존 쿠폰 먼저 파기 ★★★
         print(f"[APPLY] Checking existing coupons for {product_key} (vendorItemId: {vendor_item_id})")
-        item_cancelled = api.cancel_coupons_for_item(vendor_item_id, fixed_coupon_keywords)
+        cancel_info = api.cancel_coupons_for_item(vendor_item_id, fixed_coupon_keywords)
+        
+        item_cancelled = cancel_info.get('cancelled', [])
+        item_blocked = cancel_info.get('blocked', [])
+        
         if item_cancelled:
             cancelled_coupons.extend(item_cancelled)
             print(f"[APPLY] Cancelled {len(item_cancelled)} coupons for {product_key}")
-            # 파기 후 잠시 대기
             time_module.sleep(2)
+        
+        # 고정 쿠폰에 차단된 경우 → 이 상품은 스킵, 잔디 알림
+        if item_blocked:
+            blocked_names = ', '.join([b['name'] for b in item_blocked])
+            product_name = product.get('name', product_key)
+            print(f"[APPLY] BLOCKED: {product_key} is locked by fixed coupon(s): {blocked_names}")
+            
+            results.append({
+                "product": product_name,
+                "vendor_item_id": vendor_item_id,
+                "success": False,
+                "error": f"고정 쿠폰에 묶여있어 자동 발행 불가",
+                "blocked_by": item_blocked
+            })
+            
+            # 잔디 알림: 수동 조치 필요
+            send_jandi_notification(
+                "⚠️ [수동 조치 필요] 쿠폰 상품 해제",
+                f"📦 {group_name} - {product_name}\n\n"
+                f"해당 상품(vendorItemId: {vendor_item_id})이 고정 쿠폰에 묶여있어 "
+                f"새 할인쿠폰 연결이 불가합니다.\n\n"
+                f"🔒 차단 쿠폰: {blocked_names}\n\n"
+                f"👉 쿠팡 WING에서 해당 쿠폰의 상품 목록에서 이 상품을 수동 해제해주세요.\n"
+                f"해제 후 다시 가격 적용하면 정상 작동합니다.",
+                "red"
+            )
+            continue
         
         if not original_price:
             results.append({
@@ -1956,17 +1976,20 @@ def apply_group_prices(group_key):
     
     # 결과 요약
     success_count = sum(1 for r in results if r.get('success'))
+    blocked_count = sum(1 for r in results if r.get('blocked_by'))
     
-    log_action("APPLY_PRICES", f"가격 적용: {group_key} ({success_count}/{len(results)}개 성공)", results)
+    log_action("APPLY_PRICES", f"가격 적용: {group_key} ({success_count}/{len(results)}개 성공, {blocked_count}개 차단)", results)
     
     # 잔디 알림
     if success_count > 0:
         body = "\n".join([
-            f"• {r['product']}: {r.get('target_price', 0):,}원 ({r.get('discount_amount', 0):,}원 할인)"
+            f"✅ {r['product']}: {r.get('target_price', 0):,}원 ({r.get('discount_amount', 0):,}원 할인)"
             for r in results if r.get('success')
         ])
+        if blocked_count > 0:
+            body += f"\n\n🔒 고정 쿠폰 차단: {blocked_count}개 (수동 해제 필요)"
         if cancelled_coupons:
-            body += f"\n\n🗑️ 기존 쿠폰 {len(cancelled_coupons)}개 파기됨"
+            body += f"\n🗑️ 기존 쿠폰 {len(cancelled_coupons)}개 파기됨"
         send_jandi_notification(
             f"🎫 {group_name} 쿠폰 발행",
             body,

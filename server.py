@@ -2501,6 +2501,66 @@ def debug_check_request(request_id):
         }), 500
 
 
+@app.route('/api/product-groups/<group_key>/update-original-prices', methods=['POST'])
+def update_original_prices(group_key):
+    """그룹 상품의 쿠팡 정가(취소선 가격) 변경"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    
+    groups = config.get('product_groups', {})
+    if group_key not in groups:
+        return jsonify({"error": f"그룹 없음: {group_key}"}), 404
+    
+    data = request.json or {}
+    # {"1bottle": 90000, "3bottle": 270000, "6bottle": 540000}
+    prices = data.get('prices', {})
+    
+    if not prices:
+        return jsonify({"error": "prices를 지정해주세요. 예: {\"1bottle\": 90000}"}), 400
+    
+    api = CoupangAPI(config)
+    group = groups[group_key]
+    products = group.get('products', {})
+    results = []
+    
+    for product_key, new_price in prices.items():
+        product = products.get(product_key)
+        if not product:
+            results.append({"product": product_key, "success": False, "error": "상품 없음"})
+            continue
+        
+        vid = product.get('vendor_item_id')
+        if not vid:
+            results.append({"product": product_key, "success": False, "error": "vendor_item_id 없음"})
+            continue
+        
+        old_price = product.get('original_price', 0)
+        result = api.update_original_price(vid, int(new_price))
+        
+        if result.get('success'):
+            product['original_price'] = int(new_price)
+            results.append({
+                "product": product.get('name', product_key),
+                "vendor_item_id": vid,
+                "old_original_price": old_price,
+                "new_original_price": int(new_price),
+                "success": True
+            })
+        else:
+            results.append({
+                "product": product.get('name', product_key),
+                "success": False,
+                "error": result.get('error', ''),
+                "body": result.get('body', '')
+            })
+    
+    save_config(config)
+    log_action("UPDATE_ORIGINAL_PRICE", f"정가 변경: {group_key}", results)
+    
+    return jsonify({"success": True, "results": results})
+
+
 @app.route('/api/test', methods=['GET'])
 def test_connection():
     """API 연결 테스트 - 상세 결과 반환"""

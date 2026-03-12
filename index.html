@@ -4,6 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>쿠팡 가격 경쟁 관리 v33</title>
+    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHBhdGggZmlsbD0iI2Y5NzMxNiIgZD0iTTIgMkgzMFYzMEgyMlYyNkgxOFYzMEgxNFYyNkgxMFYzMEgyWiIvPjxyZWN0IHg9IjgiIHk9IjEwIiB3aWR0aD0iNSIgaGVpZ2h0PSI1IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIvPjxyZWN0IHg9IjE5IiB5PSIxMCIgd2lkdGg9IjUiIGhlaWdodD0iNSIgcng9IjEiIGZpbGw9IiMxYTFhMmUiLz48cmVjdCB4PSIyIiB5PSIxNiIgd2lkdGg9IjQiIGhlaWdodD0iNiIgcng9IjEiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii43Ii8+PHJlY3QgeD0iMjYiIHk9IjE2IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIgb3BhY2l0eT0iLjciLz48cmVjdCB4PSIxNCIgeT0iMjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii44Ii8+PC9zdmc+">
+    <script>
+    // 파비콘 애니메이션: 사각형 ↔ 로봇
+    const FAV_SQUARE = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNCIgZmlsbD0iI2Y5NzMxNiIvPjwvc3ZnPg==";
+    const FAV_ROBOT = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHBhdGggZmlsbD0iI2Y5NzMxNiIgZD0iTTIgMkgzMFYzMEgyMlYyNkgxOFYzMEgxNFYyNkgxMFYzMEgyWiIvPjxyZWN0IHg9IjgiIHk9IjEwIiB3aWR0aD0iNSIgaGVpZ2h0PSI1IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIvPjxyZWN0IHg9IjE5IiB5PSIxMCIgd2lkdGg9IjUiIGhlaWdodD0iNSIgcng9IjEiIGZpbGw9IiMxYTFhMmUiLz48cmVjdCB4PSIyIiB5PSIxNiIgd2lkdGg9IjQiIGhlaWdodD0iNiIgcng9IjEiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii43Ii8+PHJlY3QgeD0iMjYiIHk9IjE2IiB3aWR0aD0iNCIgaGVpZ2h0PSI2IiByeD0iMSIgZmlsbD0iIzFhMWEyZSIgb3BhY2l0eT0iLjciLz48cmVjdCB4PSIxNCIgeT0iMjYiIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMxYTFhMmUiIG9wYWNpdHk9Ii44Ii8+PC9zdmc+";
+    let favState = true;
+    setInterval(() => {
+        document.getElementById('favicon').href = favState ? FAV_SQUARE : FAV_ROBOT;
+        favState = !favState;
+    }, 1500);
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>

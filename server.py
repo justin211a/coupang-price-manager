@@ -63,7 +63,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.0"
+APP_VERSION = "33.1"
 BUILD_DATE = "2026-03-12"
 
 # 한국 시간대 (UTC+9)
@@ -523,19 +523,112 @@ class CoupangAPI:
                         result['error_detail'] = error_msg
                         return result
         
-        # 쿠폰 생성 완료 확인 → v2 API에서 vendorItemIds를 포함해 생성했으므로 상품 자동 연결됨
-        # (별도 add_coupon_items 호출 불필요 - 이중 호출 시 [CIR08] 에러 발생)
+        # 쿠폰 생성 완료 후 상품 연결 (v1 add_coupon_items 필수 - v2 생성만으로는 상품 자동연결 안 됨)
         if coupon_id:
-            print(f"[COUPON] Created! couponId: {coupon_id} (items auto-linked via v2 API)")
-            result['items_added'] = True
+            print(f"[COUPON] Created! couponId: {coupon_id}")
+            print(f"[COUPON] Adding items via v1 API: {vendor_item_ids_list}")
+            
+            add_result = self.add_coupon_items(coupon_id, vendor_item_ids_list)
+            print(f"[COUPON] add_result: {add_result}")
+            
+            # [CIR08] 충돌 감지 → 충돌 쿠폰 파기 후 재시도
+            failed_items = add_result.get('failed_items', [])
+            if failed_items:
+                for fi in failed_items:
+                    reason = fi.get('reason', '')
+                    if '[CIR08]' in reason:
+                        # 충돌 쿠폰 ID 추출: "...another coupon (12345678)."
+                        import re
+                        match = re.search(r'another coupon \((\d+)\)', reason)
+                        if match:
+                            conflict_coupon_id = int(match.group(1))
+                            conflict_vid = fi.get('vendorItemId')
+                            print(f"[COUPON] CIR08 conflict: vendorItem {conflict_vid} blocked by coupon {conflict_coupon_id}")
+                            
+                            # 충돌 쿠폰이 고정 쿠폰인지 확인
+                            is_fixed = self._is_fixed_coupon(conflict_coupon_id)
+                            
+                            if is_fixed:
+                                print(f"[COUPON] Conflict coupon {conflict_coupon_id} is FIXED - cannot auto-resolve")
+                                result['items_added'] = False
+                                result['blocked_by_fixed'] = {
+                                    'coupon_id': conflict_coupon_id,
+                                    'vendor_item_id': conflict_vid,
+                                    'reason': reason
+                                }
+                            else:
+                                # 자동 쿠폰 → 파기 후 재시도
+                                print(f"[COUPON] Cancelling conflict coupon {conflict_coupon_id}...")
+                                cancel_r = self.cancel_coupon(conflict_coupon_id)
+                                if cancel_r.get('success'):
+                                    print(f"[COUPON] Conflict coupon cancelled. Retrying add_items...")
+                                    time_module.sleep(2)
+                                    retry_result = self.add_coupon_items(coupon_id, vendor_item_ids_list)
+                                    print(f"[COUPON] Retry result: {retry_result}")
+                                    
+                                    retry_failed = retry_result.get('failed_items', [])
+                                    if retry_result.get('item_add_confirmed') or (not retry_failed):
+                                        result['items_added'] = True
+                                        result['conflict_resolved'] = conflict_coupon_id
+                                    else:
+                                        result['items_added'] = False
+                                        result['items_add_error'] = retry_result
+                                else:
+                                    print(f"[COUPON] Failed to cancel conflict coupon {conflict_coupon_id}")
+                                    result['items_added'] = False
+                                    result['items_add_error'] = cancel_r
+                        else:
+                            result['items_added'] = False
+                            result['items_add_error'] = add_result
+            elif add_result.get('item_add_confirmed') or add_result.get('success', False):
+                result['items_added'] = True
+            else:
+                result['items_added'] = False
+                result['items_add_error'] = add_result
+            
             result['coupon_id'] = coupon_id
         else:
             print(f"[COUPON] Warning: coupon created but couponId not confirmed (requestedId: {requested_id})")
-            # requestedId만 있고 couponId를 못 가져온 경우 - 비동기 처리 중일 수 있음
             result['items_added'] = False
         
         result['requested_id'] = requested_id
         return result
+    
+    def _is_fixed_coupon(self, coupon_id):
+        """고정 쿠폰 여부 확인 (이름 기반)"""
+        fixed_keywords = ['2천원', '3천원', '5천원', '1만원', '피크하이트']
+        
+        # 쿠폰 목록에서 해당 쿠폰 찾기
+        coupons_result = self.get_coupons("APPLIED")
+        if not coupons_result.get('success'):
+            return False
+        
+        coupon_data = coupons_result.get('data', {})
+        if isinstance(coupon_data, dict):
+            inner = coupon_data.get('data', {})
+            if isinstance(inner, dict):
+                coupon_list = inner.get('content', [])
+            else:
+                coupon_list = []
+        else:
+            coupon_list = []
+        
+        for c in coupon_list:
+            if c.get('couponId') == coupon_id:
+                name = c.get('promotionName', '')
+                # 이름에 고정 키워드가 있더라도, 그룹 자동쿠폰이면 고정 아님
+                # 예: "본사이언스 레스베라트롤 할인쿠폰 14,100원" → 고정 아님
+                # 예: "본사이언스 2천원 할인쿠폰" → 고정
+                # 판별: "할인쿠폰 N원" 패턴이면 자동쿠폰, "N천원/N만원 할인쿠폰"이면 고정
+                import re
+                if re.search(r'할인쿠폰\s*[\d,]+원', name):
+                    # "할인쿠폰 14,100원" 패턴 → 자동 생성 쿠폰
+                    return False
+                if any(kw in name for kw in fixed_keywords):
+                    return True
+                return False
+        
+        return False
     
     def add_coupon_items(self, coupon_id, vendor_item_ids):
         """기존 쿠폰에 상품 추가 (v1 API) - 비동기 상태 확인 포함"""

@@ -36,3 +36,17 @@ jobs:
           --vpc-connector coupang-connector \
           --vpc-egress all-traffic \
           --timeout 300
+
+    - name: Post-deploy - Trigger scheduled check
+      run: |
+        echo "Waiting 10s for Cloud Run to stabilize..."
+        sleep 10
+        SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }} --format 'value(status.url)')
+        echo "Service URL: $SERVICE_URL"
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVICE_URL/api/scheduled-check" --max-time 120)
+        echo "Scheduled check response: $RESPONSE"
+        if [ "$RESPONSE" = "200" ]; then
+          echo "Scheduled check completed successfully"
+        else
+          echo "Warning: Scheduled check returned $RESPONSE (non-fatal)"
+        fi

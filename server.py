@@ -945,11 +945,12 @@ def send_email_notification(subject, body_text, html_body=None):
 
 def build_auto_check_email(groups_result, checked_at):
     """자동 체크 결과를 이메일 HTML로 변환"""
-    subject = f"[쿠팡 가격관리] 자동 체크 결과 ({checked_at})"
+    subject = f"[가격관리] 자동 체크 결과 ({checked_at})"
     
     rows = ""
     for gk, gr in groups_result.items():
-        name = gr.get('name', gk)
+        channel = gr.get('channel', 'C')
+        name = f"[{channel}] {gr.get('name', gk)}"
         auto = '🤖 ON' if gr.get('auto_mode') else '⏸️ OFF'
         crawl = gr.get('crawl', '-')
         changed = '📊 변동!' if gr.get('price_changed') else '변동 없음'
@@ -975,7 +976,7 @@ def build_auto_check_email(groups_result, checked_at):
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
         <div style="background:#1a1a2e;color:white;padding:20px;border-radius:10px 10px 0 0">
-            <h2 style="margin:0">🏷️ 쿠팡 가격관리 자동 체크 결과</h2>
+            <h2 style="margin:0">🏷️ 가격관리 자동 체크 결과</h2>
             <p style="margin:5px 0 0;opacity:0.8">{checked_at}</p>
         </div>
         <div style="padding:20px;background:white;border:1px solid #ddd">
@@ -991,15 +992,16 @@ def build_auto_check_email(groups_result, checked_at):
             </table>
         </div>
         <div style="padding:15px;background:#f8f9fa;border-radius:0 0 10px 10px;border:1px solid #ddd;border-top:0;font-size:12px;color:#666">
-            <p>이 메일은 쿠팡 가격관리 시스템에서 자동 발송되었습니다.</p>
+            <p>이 메일은 가격관리 시스템에서 자동 발송되었습니다.</p>
             <p><a href="https://coupang-price-manager-221865276835.asia-northeast3.run.app">관리 대시보드 바로가기</a></p>
         </div>
     </div>"""
     
     # 텍스트 버전
-    text = f"쿠팡 가격관리 자동 체크 결과 ({checked_at})\n\n"
+    text = f"가격관리 자동 체크 결과 ({checked_at})\n\n"
     for gk, gr in groups_result.items():
-        name = gr.get('name', gk)
+        channel = gr.get('channel', 'C')
+        name = f"[{channel}] {gr.get('name', gk)}"
         text += f"{name}: 크롤링={gr.get('crawl','-')}, 변동={'있음' if gr.get('price_changed') else '없음'}, "
         text += f"쿠폰={'발행' if gr.get('applied') else 'OFF/실패'}\n"
     
@@ -1185,7 +1187,7 @@ LOGIN_PAGE_HTML = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로그인 - 쿠팡 가격 경쟁 관리</title>
+    <title>로그인 - 가격 경쟁 관리</title>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1260,7 +1262,7 @@ LOGIN_PAGE_HTML = '''<!DOCTYPE html>
 <body>
     <div class="login-container">
         <div class="logo">🛒</div>
-        <h1>쿠팡 가격 경쟁 관리</h1>
+        <h1>가격 경쟁 관리</h1>
         <p class="subtitle">BonScience / 테라바이오텍코리아</p>
         
         <div class="google-btn-container">
@@ -2644,7 +2646,7 @@ def test_jandi():
     """잔디 알림 테스트"""
     success = send_jandi_notification(
         "🔔 [테스트 알림]",
-        f"쿠팡 가격 경쟁 관리 시스템 알림 테스트\n\n⏰ {format_kst_datetime()}",
+        f"가격 경쟁 관리 시스템 알림 테스트\n\n⏰ {format_kst_datetime()}",
         "blue"
     )
     return jsonify({"success": success})
@@ -3966,6 +3968,7 @@ def auto_check_all():
         group_name = group.get('name', group_key)
         group_result = {
             'name': group_name,
+            'channel': group.get('channel', 'C'),
             'auto_mode': group.get('auto_mode', False),
             'crawl': None,
             'price_changed': False,

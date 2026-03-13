@@ -1703,7 +1703,24 @@ def update_product_group(group_key):
         return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
     
     data = request.json
-    groups[group_key].update(data)
+    
+    # Deep merge: products 안의 개별 필드만 업데이트 (기존 vendor_item_id 등 보존)
+    existing = groups[group_key]
+    for key, value in data.items():
+        if key == 'products' and isinstance(value, dict):
+            if 'products' not in existing:
+                existing['products'] = {}
+            for pk, pv in value.items():
+                if isinstance(pv, dict) and pk in existing['products']:
+                    existing['products'][pk].update(pv)
+                else:
+                    existing['products'][pk] = pv
+        elif key == 'competitors' and isinstance(value, list):
+            # competitors는 리스트이므로 그대로 교체
+            existing[key] = value
+        else:
+            existing[key] = value
+    
     save_config(config)
     
     log_action("GROUP_UPDATE", f"제품 그룹 수정: {group_key}", data)

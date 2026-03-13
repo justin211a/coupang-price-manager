@@ -43,10 +43,30 @@ jobs:
         sleep 10
         SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }} --format 'value(status.url)')
         echo "Service URL: $SERVICE_URL"
-        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVICE_URL/api/scheduled-check" --max-time 120)
-        echo "Scheduled check response: $RESPONSE"
-        if [ "$RESPONSE" = "200" ]; then
-          echo "Scheduled check completed successfully"
-        else
-          echo "Warning: Scheduled check returned $RESPONSE (non-fatal)"
+        
+        # 3회 재시도
+        MAX_RETRIES=3
+        RETRY=0
+        SUCCESS=false
+        
+        while [ $RETRY -lt $MAX_RETRIES ]; do
+          RETRY=$((RETRY + 1))
+          echo "Attempt $RETRY/$MAX_RETRIES..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVICE_URL/api/scheduled-check" --max-time 120)
+          echo "Response: $RESPONSE"
+          
+          if [ "$RESPONSE" = "200" ]; then
+            echo "Scheduled check completed successfully"
+            SUCCESS=true
+            break
+          fi
+          
+          if [ $RETRY -lt $MAX_RETRIES ]; then
+            echo "Retrying in 15s..."
+            sleep 15
+          fi
+        done
+        
+        if [ "$SUCCESS" = "false" ]; then
+          echo "WARNING: All $MAX_RETRIES attempts failed (server startup auto-check will retry)"
         fi

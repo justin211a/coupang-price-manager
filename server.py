@@ -3971,6 +3971,8 @@ def generate_ai_insight(group_key):
 
 # ==================== 전체 자동화 ====================
 
+_auto_check_lock = threading.Lock()
+
 @app.route('/api/auto-check-all', methods=['GET', 'POST'])
 def auto_check_all():
     """전체 자동화 엔드포인트 (Cloud Scheduler 2시간마다 호출)
@@ -3985,6 +3987,17 @@ def auto_check_all():
     - Method: POST
     - Frequency: 0 */2 9-22 * * (09~22시, 2시간마다)
     """
+    if not _auto_check_lock.acquire(blocking=False):
+        return jsonify({"message": "이미 실행 중입니다", "executed": False, "skipped": True})
+    
+    try:
+        return _do_auto_check_all()
+    finally:
+        _auto_check_lock.release()
+
+
+def _do_auto_check_all():
+    """실제 자동 체크 로직 (락 내부에서 실행)"""
     config = load_config()
     if not config:
         return jsonify({"error": "설정 파일이 없습니다", "executed": False}), 404
@@ -4086,33 +4099,14 @@ def auto_check_all():
 def api_scheduled_check():
     """Cloud Scheduler가 호출하는 자동 체크 엔드포인트
     
+    → auto_check_all()로 위임 (product_groups 기반 신규 로직)
+    
     Cloud Scheduler 설정:
     - URL: https://your-cloud-run-url.run.app/api/scheduled-check
     - HTTP Method: POST
-    - Frequency: */15 * * * * (15분마다) 또는 원하는 간격
+    - Frequency: 0 */2 9-22 * * (09~22시, 2시간마다)
     """
-    config = load_config()
-    if not config:
-        return jsonify({"error": "설정 파일이 없습니다", "executed": False}), 404
-    
-    auto_mode = config['settings'].get('auto_mode', False)
-    if not auto_mode:
-        return jsonify({
-            "message": "오토모드가 비활성화 상태입니다",
-            "auto_mode": False,
-            "executed": False
-        })
-    
-    # 스케줄 체크 실행
-    log_action("SCHEDULED_CHECK", "Cloud Scheduler 호출 - 자동 체크 시작")
-    scheduled_check_reminder()
-    
-    return jsonify({
-        "message": "스케줄 체크 완료",
-        "auto_mode": True,
-        "executed": True,
-        "timestamp": format_kst_datetime()
-    })
+    return auto_check_all()
 
 
 def scheduled_check_reminder():
@@ -4281,6 +4275,45 @@ def check_and_renew_coupons(config, competitor_price):
             "blue"
         )
         log_action("SCHEDULER", "쿠폰 모두 활성 상태, 재발행 불필요")
+
+
+# ==================== 서버 시작 시 자동 스케줄러 실행 ====================
+
+import threading
+
+def _startup_scheduled_check():
+    """서버 시작 후 자동으로 스케줄러 실행 (배포 후 공백 방지)"""
+    import time as _time
+    _time.sleep(15)  # 서버 완전 기동 대기
+    
+    try:
+        print("[STARTUP] 서버 시작 - 자동 스케줄러 실행 시작")
+        with app.app_context():
+            with app.test_request_context():
+                result = api_scheduled_check()
+                if hasattr(result, 'get_json'):
+                    data = result.get_json()
+                else:
+                    data = result
+                success = data.get('success', False) if isinstance(data, dict) else False
+                print(f"[STARTUP] 자동 스케줄러 결과: {'성공' if success else '실패'}")
+    except Exception as e:
+        print(f"[STARTUP] 자동 스케줄러 실행 실패: {e}")
+        # 실패 시 잔디 알림
+        try:
+            send_jandi_notification(
+                "⚠️ [서버 시작] 자동 스케줄러 실패",
+                f"서버 시작 후 자동 스케줄러 실행이 실패했습니다.\n오류: {str(e)[:200]}\n\n수동 확인 필요: /api/scheduled-check",
+                "red"
+            )
+        except:
+            pass
+
+# Cloud Run 환경에서만 시작 시 자동 실행 (로컬 개발 제외)
+if os.environ.get('K_SERVICE'):
+    _startup_thread = threading.Thread(target=_startup_scheduled_check, daemon=True)
+    _startup_thread.start()
+    print("[STARTUP] 자동 스케줄러 백그라운드 스레드 시작됨 (15초 후 실행)")
 
 
 # ==================== 메인 ====================

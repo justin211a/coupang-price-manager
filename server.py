@@ -2662,6 +2662,17 @@ def test_connection():
         })
 
 
+@app.route('/api/debug/raw-inventory/<int:vendor_item_id>', methods=['GET'])
+def debug_raw_inventory(vendor_item_id):
+    """디버그: 쿠팡 WING API 원본 응답 확인 (인증 불필요)"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    api = CoupangAPI(config)
+    result = api.get_inventory(vendor_item_id)
+    return jsonify({"vendor_item_id": vendor_item_id, "raw_response": result})
+
+
 @app.route('/api/test-jandi', methods=['POST'])
 def test_jandi():
     """잔디 알림 테스트"""

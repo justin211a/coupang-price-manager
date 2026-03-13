@@ -898,11 +898,11 @@ def send_email_notification(subject, body_text, html_body=None):
         payload["html_body"] = html_body
     
     try:
-        data = json.dumps(payload).encode('utf-8')
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(
             webhook_url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json; charset=utf-8"},
             method="POST"
         )
         # Apps Script는 302 리다이렉트를 하므로 직접 처리

@@ -18,6 +18,7 @@ import urllib.request
 import ssl
 import json
 import secrets
+import threading
 import functools
 import re
 from datetime import datetime, timedelta, timezone
@@ -4278,8 +4279,6 @@ def check_and_renew_coupons(config, competitor_price):
 
 
 # ==================== 서버 시작 시 자동 스케줄러 실행 ====================
-
-import threading
 
 def _startup_scheduled_check():
     """서버 시작 후 자동으로 스케줄러 실행 (배포 후 공백 방지)"""

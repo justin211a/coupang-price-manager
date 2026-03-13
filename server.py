@@ -960,9 +960,12 @@ def build_auto_check_email(groups_result, checked_at):
         crawl = gr.get('crawl', '-')
         changed = '📊 변동!' if gr.get('price_changed') else '변동 없음'
         
-        if gr.get('applied'):
+        if gr.get('applied') and not gr.get('partial_fail'):
             applied = f"✅ {gr.get('apply_detail', '성공')}"
             row_color = '#e8f5e9'
+        elif gr.get('applied') and gr.get('partial_fail'):
+            applied = f"⚠️ {gr.get('apply_detail', '부분 실패')}"
+            row_color = '#fff3e0'
         elif gr.get('auto_mode'):
             applied = f"❌ {gr.get('apply_error', '실패')}"
             row_color = '#ffebee'
@@ -2385,7 +2388,8 @@ def apply_group_prices(group_key):
                     "expected_final_price": expected_final,
                     "coupon_id": coupon_id,
                     "items_added": items_added,
-                    "success": True
+                    "success": items_added,  # 상품 연결 실패하면 실패 처리!
+                    "error": "" if items_added else f"쿠폰 생성됨(ID:{coupon_id}) but 상품 연결 실패 - 쿠팡에서 할인 미적용"
                 })
             else:
                 error_msg = coupon_result.get('error', 'Unknown error')
@@ -2405,11 +2409,33 @@ def apply_group_prices(group_key):
     
     save_config(config)
     
+    # 상품이 하나도 처리되지 않은 경우 → 명확한 실패
+    if not results:
+        error_msg = f"처리된 상품이 없습니다. vendor_item_id 설정을 확인하세요."
+        log_action("APPLY_PRICES", f"가격 적용 실패: {group_key} - {error_msg}")
+        send_jandi_notification(
+            f"🚨 {group_name} 쿠폰 발행 실패",
+            f"처리된 상품 0개 — vendor_item_id가 설정되지 않았거나 상품 데이터가 없습니다.\n\n관리자 확인 필요",
+            "red"
+        )
+        return jsonify({
+            "success": False,
+            "error": error_msg,
+            "results": [],
+            "cancelled_coupons": cancelled_coupons,
+            "blocked_coupons": blocked_coupons,
+            "applied_at": format_kst_datetime()
+        })
+    
     # 결과 요약
     success_count = sum(1 for r in results if r.get('success'))
+    fail_count = sum(1 for r in results if not r.get('success'))
     blocked_count = sum(1 for r in results if r.get('blocked_by'))
     
-    log_action("APPLY_PRICES", f"가격 적용: {group_key} ({success_count}/{len(results)}개 성공, {blocked_count}개 차단)", results)
+    # 실제 성공 여부 판단: 1개 이상 성공해야 true
+    overall_success = success_count > 0
+    
+    log_action("APPLY_PRICES", f"가격 적용: {group_key} ({success_count}/{len(results)}개 성공, {fail_count}개 실패, {blocked_count}개 차단)", results)
     
     # 잔디 알림
     if success_count > 0:
@@ -2427,8 +2453,20 @@ def apply_group_prices(group_key):
             "green" if success_count == len(results) else "yellow"
         )
     
+    # 실패가 있으면 잔디 경고 알림
+    if fail_count > 0:
+        fail_body = "\n".join([
+            f"❌ {r['product']}: {r.get('error', '알 수 없는 오류')}"
+            for r in results if not r.get('success')
+        ])
+        send_jandi_notification(
+            f"⚠️ {group_name} 쿠폰 발행 실패 ({fail_count}건)",
+            fail_body,
+            "red"
+        )
+    
     return jsonify({
-        "success": True,
+        "success": overall_success,
         "results": results,
         "cancelled_coupons": cancelled_coupons,
         "blocked_coupons": blocked_coupons,
@@ -4063,12 +4101,28 @@ def _do_auto_check_all():
                         apply_data = apply_response
                     
                     apply_success = apply_data.get('success', False) if isinstance(apply_data, dict) else False
-                    group_result['applied'] = apply_success
                     
                     if apply_success:
                         results_data = apply_data.get('results', [])
                         ok = sum(1 for r in results_data if r.get('success'))
-                        group_result['apply_detail'] = f"{ok}/{len(results_data)} coupons issued"
+                        fail = sum(1 for r in results_data if not r.get('success'))
+                        total = len(results_data)
+                        
+                        if total == 0:
+                            # 상품 0개 처리 = 실질적 실패
+                            group_result['applied'] = False
+                            group_result['apply_error'] = '상품 데이터 없음 (vendor_item_id 확인 필요)'
+                        elif fail > 0:
+                            # 부분 실패
+                            group_result['applied'] = True
+                            group_result['partial_fail'] = True
+                            group_result['apply_detail'] = f"{ok}/{total} coupons issued ({fail} failed)"
+                        else:
+                            group_result['applied'] = True
+                            group_result['apply_detail'] = f"{ok}/{total} coupons issued"
+                    else:
+                        group_result['applied'] = False
+                        group_result['apply_error'] = apply_data.get('error', '발행 실패') if isinstance(apply_data, dict) else '발행 실패'
                     
             except Exception as e:
                 group_result['applied'] = False

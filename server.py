@@ -101,6 +101,10 @@ GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '221865276835-alff74k8g6mc
 ALLOWED_EMAILS = [
     'justin@terabiotech.com',
     'shjung4196@gmail.com',
+    'david@terabiotech.com',
+    'jun@terabiotech.com',
+    'andrew@terabiotech.com',
+    'reina@terabiotech.com',
 ]
 
 # 인증 필요 여부 (개발 시 False로 설정 가능)

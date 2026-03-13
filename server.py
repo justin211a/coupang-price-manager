@@ -74,10 +74,12 @@ def get_kst_now():
     """한국 시간 기준 현재 시각"""
     return datetime.now(KST)
 
-def format_kst_datetime(dt=None):
+def format_kst_datetime(dt=None, offset_minutes=0):
     """한국 시간 포맷 (YYYY-MM-DD HH:mm:ss)"""
     if dt is None:
         dt = get_kst_now()
+    if offset_minutes:
+        dt = dt + timedelta(minutes=offset_minutes)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 # GMT 시간대 설정 (쿠팡 API HMAC용)
@@ -4133,19 +4135,252 @@ def _do_auto_check_all():
     
     log_action("AUTO_CHECK_ALL", f"전체 자동 체크 완료: {len(all_results)}개 그룹", all_results)
     
-    # 이메일 알림 발송
     checked_at = format_kst_datetime()
-    try:
-        subject, text, html = build_auto_check_email(all_results, checked_at)
-        send_email_notification(subject, text, html)
-    except Exception as e:
-        print(f"[AUTO_CHECK_ALL] 이메일 발송 실패: {e}")
+    
+    # 이메일: 15분 후 쿠팡 쿠폰 적용 여부 검증 후 발송 (백그라운드)
+    _start_delayed_verification(all_results, checked_at, config)
     
     return jsonify({
         "success": True,
         "groups": all_results,
-        "checked_at": checked_at
+        "checked_at": checked_at,
+        "email": "15분 후 검증 완료 시 발송 예정"
     })
+
+
+COUPON_VERIFY_DELAY_SECONDS = 15 * 60  # 15분
+
+
+def _start_delayed_verification(all_results, checked_at, config):
+    """백그라운드 스레드로 15분 후 쿠폰 적용 검증 + 이메일 발송"""
+    
+    # GCS에 검증 대기 상태 저장 (컨테이너 재시작 안전장치)
+    try:
+        pending = {
+            'all_results': all_results,
+            'checked_at': checked_at,
+            'verify_after': format_kst_datetime(offset_minutes=15),
+            'status': 'pending'
+        }
+        save_to_gcs(pending, 'pending_verification.json')
+        print("[VERIFY] 검증 대기 상태 GCS 저장 완료")
+    except Exception as e:
+        print(f"[VERIFY] GCS 저장 실패 (계속 진행): {e}")
+    
+    def _delayed_verify():
+        import time as _time
+        
+        delay = COUPON_VERIFY_DELAY_SECONDS
+        print(f"[VERIFY] {delay//60}분 후 쿠폰 적용 검증 예정...")
+        _time.sleep(delay)
+        
+        print("[VERIFY] 쿠폰 적용 검증 시작")
+        
+        try:
+            with app.app_context():
+                verified_results = _verify_coupon_application(all_results, config)
+                verified_at = format_kst_datetime()
+                
+                # 검증 실패 시 잔디 긴급 알림
+                for gk, gr in verified_results.items():
+                    if gr.get('verify_ok') == False:
+                        details = '\n'.join(gr.get('verify_details', []))
+                        send_jandi_notification(
+                            f"🚨 [{gr.get('name', gk)}] 쿠폰 적용 실패 감지!",
+                            f"15분 검증 결과 쿠팡에서 쿠폰이 활성화되지 않았습니다.\n\n{details}\n\n수동 확인 필요",
+                            "red"
+                        )
+                
+                # 검증 결과로 이메일 발송
+                subject, text, html = build_verified_email(verified_results, checked_at, verified_at)
+                send_email_notification(subject, text, html)
+                
+                log_action("VERIFY_COMPLETE", f"쿠폰 검증 완료 + 이메일 발송", verified_results)
+                
+                # GCS 검증 대기 상태 삭제
+                try:
+                    save_to_gcs({'status': 'completed', 'verified_at': verified_at}, 'pending_verification.json')
+                except:
+                    pass
+        except Exception as e:
+            print(f"[VERIFY] 검증 실패: {e}")
+            # 검증 실패해도 발행 결과 기반으로 이메일 발송 (검증 실패 표시)
+            try:
+                for gk in all_results:
+                    all_results[gk]['verify_status'] = f'검증 실패: {str(e)[:50]}'
+                    all_results[gk]['verify_ok'] = False
+                subject, text, html = build_verified_email(all_results, checked_at, format_kst_datetime())
+                send_email_notification(subject, text, html)
+            except Exception as e2:
+                print(f"[VERIFY] 이메일 발송도 실패: {e2}")
+                send_jandi_notification("🚨 [긴급] 쿠폰 검증 + 이메일 발송 실패", f"오류: {str(e)}\n이메일 오류: {str(e2)}", "red")
+    
+    t = threading.Thread(target=_delayed_verify, daemon=True)
+    t.start()
+    print(f"[VERIFY] 검증 스레드 시작됨 ({COUPON_VERIFY_DELAY_SECONDS//60}분 후 실행)")
+
+
+def _verify_coupon_application(all_results, config):
+    """쿠팡 API로 각 그룹별 쿠폰 활성 여부 검증"""
+    api = CoupangAPI(config)
+    
+    # 현재 활성 쿠폰 전체 조회
+    coupons_response = api.get_coupons("APPLIED")
+    active_coupons = []
+    if coupons_response.get('success'):
+        data = coupons_response.get('data', {})
+        if isinstance(data, dict):
+            active_coupons = data.get('content', [])
+        elif isinstance(data, list):
+            active_coupons = data
+    
+    # vendorItemId → 활성 쿠폰 매핑
+    coupon_by_item = {}
+    for c in active_coupons:
+        for vid in (c.get('vendorItemIds') or []):
+            coupon_by_item[str(vid)] = {
+                'coupon_id': c.get('couponId'),
+                'title': c.get('title', ''),
+                'discount': c.get('discountValue', 0),
+                'status': c.get('couponStatus', '')
+            }
+    
+    groups = config.get('product_groups', {})
+    
+    for group_key, gr in all_results.items():
+        if not gr.get('applied'):
+            # 발행 시도 안 한 경우 검증 스킵
+            gr['verify_status'] = '발행 안 함'
+            gr['verify_ok'] = None
+            continue
+        
+        group_config = groups.get(group_key, {})
+        products = group_config.get('products', {})
+        
+        verified = 0
+        failed = 0
+        details = []
+        
+        for pk in ['1bottle', '3bottle', '6bottle']:
+            product = products.get(pk)
+            if not product or not product.get('vendor_item_id'):
+                continue
+            
+            vid = str(product['vendor_item_id'])
+            coupon_info = coupon_by_item.get(vid)
+            
+            if coupon_info:
+                verified += 1
+                details.append(f"✅ {product.get('name', pk)}: 쿠폰 활성 (할인 {coupon_info['discount']:,}원)")
+            else:
+                failed += 1
+                details.append(f"❌ {product.get('name', pk)}: 쿠폰 미적용 (vid:{vid})")
+        
+        total = verified + failed
+        if total == 0:
+            gr['verify_status'] = '검증 대상 없음'
+            gr['verify_ok'] = None
+        elif failed == 0:
+            gr['verify_status'] = f'✅ {verified}/{total} 쿠폰 확인'
+            gr['verify_ok'] = True
+        else:
+            gr['verify_status'] = f'❌ {failed}/{total} 미적용'
+            gr['verify_ok'] = False
+        
+        gr['verify_details'] = details
+    
+    return all_results
+
+
+def build_verified_email(groups_result, issued_at, verified_at):
+    """검증 완료 후 이메일 HTML 생성"""
+    
+    # 전체 상태 판단
+    any_fail = any(gr.get('verify_ok') == False for gr in groups_result.values())
+    all_ok = all(gr.get('verify_ok') in (True, None) for gr in groups_result.values())
+    
+    if any_fail:
+        subject = f"🚨 [가격관리] 쿠폰 적용 실패 감지 ({verified_at})"
+        header_bg = '#b71c1c'
+        header_text = '⚠️ 쿠폰 적용 실패 감지'
+    else:
+        subject = f"[가격관리] 자동 체크 결과 ({verified_at})"
+        header_bg = '#1a1a2e'
+        header_text = '🏷️ 가격관리 자동 체크 결과'
+    
+    rows = ""
+    for gk, gr in groups_result.items():
+        channel = gr.get('channel', 'C')
+        name = f"[{channel}] {gr.get('name', gk)}"
+        auto = '🤖 ON' if gr.get('auto_mode') else '⏸️ OFF'
+        crawl = gr.get('crawl', '-')
+        changed = '📊 변동!' if gr.get('price_changed') else '변동 없음'
+        
+        # 검증 결과 기반 상태 표시
+        verify_ok = gr.get('verify_ok')
+        if verify_ok is True:
+            applied = f"✅ {gr.get('verify_status', '확인됨')}"
+            row_color = '#e8f5e9'
+        elif verify_ok is False:
+            applied = f"❌ {gr.get('verify_status', '실패')}"
+            row_color = '#ffebee'
+        elif gr.get('auto_mode'):
+            applied = gr.get('verify_status', gr.get('apply_error', '확인 불가'))
+            row_color = '#fff3e0'
+        else:
+            applied = '— (auto OFF)'
+            row_color = '#f5f5f5'
+        
+        rows += f"""<tr style="background:{row_color}">
+            <td style="padding:8px;border:1px solid #ddd;font-weight:bold">{name}</td>
+            <td style="padding:8px;border:1px solid #ddd;text-align:center">{auto}</td>
+            <td style="padding:8px;border:1px solid #ddd">{crawl}</td>
+            <td style="padding:8px;border:1px solid #ddd">{changed}</td>
+            <td style="padding:8px;border:1px solid #ddd">{applied}</td>
+        </tr>"""
+    
+    # 실패 상세 정보
+    fail_details_html = ""
+    for gk, gr in groups_result.items():
+        if gr.get('verify_ok') == False and gr.get('verify_details'):
+            fail_details_html += f"<div style='margin:10px 0;padding:10px;background:#fff3e0;border-left:4px solid #f44336;border-radius:4px'>"
+            fail_details_html += f"<b>{gr.get('name', gk)}</b><br>"
+            fail_details_html += "<br>".join(gr['verify_details'])
+            fail_details_html += "</div>"
+    
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:{header_bg};color:white;padding:20px;border-radius:10px 10px 0 0">
+            <h2 style="margin:0">{header_text}</h2>
+            <p style="margin:5px 0 0;opacity:0.8">발행: {issued_at} | 검증: {verified_at}</p>
+        </div>
+        <div style="padding:20px;background:white;border:1px solid #ddd">
+            <table style="width:100%;border-collapse:collapse">
+                <tr style="background:#1a1a2e;color:white">
+                    <th style="padding:10px;text-align:left">그룹</th>
+                    <th style="padding:10px;text-align:center">모드</th>
+                    <th style="padding:10px">크롤링</th>
+                    <th style="padding:10px">가격변동</th>
+                    <th style="padding:10px">쿠폰 검증</th>
+                </tr>
+                {rows}
+            </table>
+            {fail_details_html}
+        </div>
+        <div style="padding:15px;background:#f8f9fa;border-radius:0 0 10px 10px;border:1px solid #ddd;border-top:0;font-size:12px;color:#666">
+            <p>이 메일은 가격관리 시스템에서 자동 발송되었습니다. (쿠폰 발행 15분 후 검증 완료)</p>
+            <p><a href="https://coupang-price-manager-221865276835.asia-northeast3.run.app">관리 대시보드 바로가기</a></p>
+        </div>
+    </div>"""
+    
+    # 텍스트 버전
+    text = f"가격관리 자동 체크 결과 (발행: {issued_at}, 검증: {verified_at})\n\n"
+    for gk, gr in groups_result.items():
+        channel = gr.get('channel', 'C')
+        name = f"[{channel}] {gr.get('name', gk)}"
+        text += f"{name}: {gr.get('verify_status', '확인 불가')}\n"
+    
+    return subject, text, html
 
 
 # ==================== 스케줄러 ====================

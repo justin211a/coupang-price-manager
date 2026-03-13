@@ -35,6 +35,7 @@ jobs:
           --project ${{ env.PROJECT_ID }} \
           --vpc-connector coupang-connector \
           --vpc-egress all-traffic \
+          --no-cpu-throttling \
           --timeout 300
 
     - name: Post-deploy - Trigger scheduled check

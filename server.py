@@ -879,6 +879,31 @@ def send_jandi_notification(title, body, color="blue"):
         return False
 
 
+def _convert_4byte_emoji(text):
+    """4바이트 유니코드 이모지를 HTML 엔티티로 변환 (HTML body용)"""
+    result = []
+    for ch in text:
+        if ord(ch) > 0xFFFF:
+            result.append(f'&#{ord(ch)};')
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
+def _replace_4byte_emoji(text):
+    """4바이트 이모지를 BMP 대체 문자로 변환 (이메일 제목/본문용)"""
+    replacements = {
+        '🏷': '[가격]', '🤖': '[AUTO]', '📊': '[통계]', '📈': '[상승]', '📉': '[하락]',
+        '🔍': '[검색]', '👉': '>>', '💰': '[원]', '📌': '[!]', '🔔': '[알림]',
+        '🎯': '[타겟]', '💡': '[TIP]', '⚡': '[번개]', '🚨': '[경고]', '🛒': '[장바구니]',
+        '📦': '[상품]', '🎫': '[쿠폰]', '🧹': '[정리]',
+    }
+    for emoji, replacement in replacements.items():
+        text = text.replace(emoji, replacement)
+    # 나머지 4바이트 이모지 제거
+    return ''.join(ch for ch in text if ord(ch) <= 0xFFFF)
+
+
 def send_email_notification(subject, body_text, html_body=None):
     """Apps Script 웹 앱을 통한 이메일 알림 발송"""
     config = load_config()
@@ -891,11 +916,11 @@ def send_email_notification(subject, body_text, html_body=None):
         return False
     
     payload = {
-        "subject": subject,
-        "body": body_text,
+        "subject": _replace_4byte_emoji(subject),
+        "body": _replace_4byte_emoji(body_text),
     }
     if html_body:
-        payload["html_body"] = html_body
+        payload["html_body"] = _convert_4byte_emoji(html_body)
     
     try:
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')

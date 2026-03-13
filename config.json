@@ -9,7 +9,8 @@
     "jandi_webhook": "https://wh.jandi.com/connect-api/webhook/18891904/0afe7bcc161e91ead2a9297c2d242ad0",
     "coupon_budget": 500000,
     "coupon_used": 0,
-    "contract_id": "173582"
+    "contract_id": "173582",
+    "email_webhook_url": "https://script.google.com/macros/s/AKfycbwRI41PECxldl2t52Md7f_Azwj8CQnUNS6nCeaJZZeGpuCc7uVOgh2070aUxTvts0qgnQ/exec"
   },
   "product_groups": {
     "prime_nmn": {

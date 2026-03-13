@@ -344,7 +344,7 @@ function renderStatusBanner() {
     if (!g) return;
     const comp = (g.competitors || [])[0];
     const compPrice = comp?.last_price || 0;
-    const ourPrice = g.products?.['1bottle']?.current_price || 0;
+    const prods = g.products || {};
 
     if (!compPrice) {
         c.className = 'bg-gray-800 border border-gray-600 rounded-2xl p-4 mb-6';
@@ -352,13 +352,59 @@ function renderStatusBanner() {
         return;
     }
 
-    const diff = compPrice - ourPrice;
-    const win = diff > 0;
-    c.className = `bg-gradient-to-r ${win ? 'from-green-900/50 to-emerald-900/50 border-green-500/50' : 'from-red-900/50 to-orange-900/50 border-red-500/50'} border rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-4`;
+    // 1~6병 전체 비교 (쿠팡 판매가 = original_price vs 경쟁사*병수)
+    const bottles = [
+        { key: '1bottle', label: '1병', mult: 1 },
+        { key: '3bottle', label: '3병', mult: 3 },
+        { key: '6bottle', label: '6병', mult: 6 }
+    ];
+
+    let losing = [];
+    let winning = [];
+    let totalItems = 0;
+
+    bottles.forEach(b => {
+        const p = prods[b.key];
+        if (!p || !p.original_price) return;
+        totalItems++;
+        const ourPrice = p.original_price;
+        const theirPrice = compPrice * b.mult;
+        const diff = ourPrice - theirPrice;
+        if (diff > 0) {
+            losing.push({ label: b.label, diff, ourPrice, theirPrice });
+        } else {
+            winning.push({ label: b.label, diff: Math.abs(diff), ourPrice, theirPrice });
+        }
+    });
+
+    const allWin = losing.length === 0 && winning.length > 0;
+    const allLose = winning.length === 0 && losing.length > 0;
+
+    let detailHtml = '';
+    if (losing.length > 0) {
+        detailHtml = losing.map(l => 
+            `<span class="inline-block bg-red-900/50 rounded px-2 py-1 text-sm mr-1 mb-1">${l.label}: <b class="text-red-300">${fmt(l.diff)}원 비쌈</b> <span class="text-gray-400">(${fmt(l.ourPrice)} vs ${fmt(l.theirPrice)})</span></span>`
+        ).join('');
+    }
+    if (winning.length > 0) {
+        detailHtml += winning.map(w => 
+            `<span class="inline-block bg-green-900/50 rounded px-2 py-1 text-sm mr-1 mb-1">${w.label}: <b class="text-green-300">${fmt(w.diff)}원 저렴</b> <span class="text-gray-400">(${fmt(w.ourPrice)} vs ${fmt(w.theirPrice)})</span></span>`
+        ).join('');
+    }
+
+    const icon = allWin ? '🏆' : allLose ? '🚨' : '⚠️';
+    const titleText = allWin ? '전 옵션 우위' : allLose ? '전 옵션 경쟁사보다 비쌈' : `${losing.length}개 옵션 경쟁사보다 비쌈`;
+    const titleColor = allWin ? 'text-green-400' : 'text-red-400';
+    const borderColor = allWin ? 'border-green-500/50' : allLose ? 'border-red-500/50' : 'border-yellow-500/50';
+    const bgGrad = allWin ? 'from-green-900/50 to-emerald-900/50' : allLose ? 'from-red-900/50 to-orange-900/50' : 'from-yellow-900/50 to-orange-900/50';
+
+    c.className = `bg-gradient-to-r ${bgGrad} ${borderColor} border rounded-2xl p-4 mb-6`;
     c.innerHTML = `
-        <div class="flex items-center gap-3"><span class="text-3xl">${win ? '🏆' : '⚠️'}</span><div><p class="font-bold ${win ? 'text-green-400' : 'text-red-400'} text-lg">${win ? '현재 우위' : '경쟁사 앞섬'}</p><p class="${win ? 'text-green-300' : 'text-red-300'}">경쟁사보다 <span class="font-bold text-xl">${fmt(Math.abs(diff))}원</span> ${win ? '저렴' : '비쌈'}</p></div></div>
-        <div class="text-right"><p class="text-gray-400 text-sm">우리 가격</p><p class="text-2xl font-bold">${fmt(ourPrice)}원</p></div>
-        <div class="text-right"><p class="text-gray-400 text-sm">경쟁사 가격</p><p class="text-2xl font-bold text-gray-300">${fmt(compPrice)}원</p></div>
+        <div class="flex items-center gap-3 mb-3"><span class="text-3xl">${icon}</span>
+            <div><p class="font-bold ${titleColor} text-lg">${titleText}</p>
+            <p class="text-gray-400 text-sm">경쟁사 1병 기준가: ${fmt(compPrice)}원 (쿠폰 적용 전 비교)</p></div>
+        </div>
+        <div class="flex flex-wrap gap-1">${detailHtml}</div>
     `;
 }
 

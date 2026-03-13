@@ -2076,18 +2076,17 @@ def sync_group_prices(group_key):
             if isinstance(data, dict):
                 inner_data = data.get('data', data)
                 if isinstance(inner_data, dict):
-                    original_price = inner_data.get('originalPrice') or inner_data.get('supplyPrice')
-                    sale_price = inner_data.get('salePrice') or inner_data.get('originalPrice')
+                    sale_price = inner_data.get('salePrice')
             
-            if original_price:
-                products[product_key]['original_price'] = int(original_price)
+            # salePrice = 쿠팡에 설정된 실제 판매가 (쿠폰 적용 전 가격)
             if sale_price:
+                products[product_key]['original_price'] = int(sale_price)
                 products[product_key]['current_price'] = int(sale_price)
             
             results.append({
                 "product": product.get('name', product_key),
                 "vendor_item_id": vendor_item_id,
-                "original_price": original_price,
+                "original_price": sale_price,
                 "current_price": sale_price,
                 "success": True
             })

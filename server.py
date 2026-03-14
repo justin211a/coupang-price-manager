@@ -1020,8 +1020,12 @@ def build_auto_check_email(groups_result, checked_at):
 
 # ==================== 경쟁사 크롤링 ====================
 
-def crawl_coupang_price(url):
+def crawl_coupang_price(url, use_premium=False):
     """쿠팡 상품 페이지에서 가격 크롤링 (ScraperAPI 경유)
+    
+    Args:
+        url: 쿠팡 상품 URL
+        use_premium: True면 premium 프록시 사용 (10크레딧)
     
     Returns:
         dict: {success: bool, price: int, name: str, error: str}
@@ -1041,40 +1045,25 @@ def crawl_coupang_price(url):
         clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
         print(f"[CRAWL] URL: {clean_url}")
         
-        # ScraperAPI 호출 (1크레딧)
+        # ScraperAPI 호출
         response = None
+        params = {
+            "api_key": scraper_api_key,
+            "url": clean_url,
+            "country_code": "kr"
+        }
+        if use_premium:
+            params["premium"] = "true"
+            print(f"[CRAWL] Premium 프록시 사용 (10크레딧)")
         
         try:
             response = http_req.get(
                 "https://api.scraperapi.com",
-                params={
-                    "api_key": scraper_api_key,
-                    "url": clean_url,
-                    "country_code": "kr"
-                },
+                params=params,
                 timeout=90
             )
         except Exception as req_err:
             print(f"[CRAWL] Request failed: {req_err}")
-        
-        # 일반 프록시 실패 시 premium 프록시로 재시도 (10크레딧)
-        if not response or response.status_code != 200:
-            print(f"[CRAWL] 일반 프록시 실패 ({response.status_code if response else 'no response'}), premium 프록시로 재시도...")
-            try:
-                response = http_req.get(
-                    "https://api.scraperapi.com",
-                    params={
-                        "api_key": scraper_api_key,
-                        "url": clean_url,
-                        "country_code": "kr",
-                        "premium": "true"
-                    },
-                    timeout=90
-                )
-                if response and response.status_code == 200:
-                    print(f"[CRAWL] Premium 프록시 성공 ({len(response.text)}자)")
-            except Exception as req_err:
-                print(f"[CRAWL] Premium request also failed: {req_err}")
         
         if not response or response.status_code != 200:
             status = response.status_code if response else 'no response'
@@ -1158,9 +1147,10 @@ def crawl_competitor_prices(product_group):
         
         result = None
         
-        # 최대 3회 재시도
+        # 최대 3회 재시도 (마지막만 premium 프록시)
         for attempt in range(1, MAX_RETRIES + 1):
-            result = crawl_coupang_price(url)
+            is_last = (attempt == MAX_RETRIES)
+            result = crawl_coupang_price(url, use_premium=is_last)
             result['competitor_id'] = competitor.get('id', '')
             result['competitor_name'] = competitor.get('name', '')
             

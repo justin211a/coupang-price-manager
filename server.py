@@ -1020,105 +1020,153 @@ def build_auto_check_email(groups_result, checked_at):
 
 # ==================== 경쟁사 크롤링 ====================
 
+def _extract_price_from_html(html, url):
+    """HTML에서 쿠팡 가격 추출 (공통 로직)"""
+    price = None
+    name = ""
+    
+    # 방법 1: final-price-amount 클래스 (최우선)
+    match = re.search(r'final-price-amount[^>]*>(\d{1,3}(?:,\d{3})+)원', html)
+    if match:
+        price = int(match.group(1).replace(',', ''))
+    
+    # 방법 2: prod-sale-price (구 구조)
+    if not price:
+        match = re.search(r'prod-sale-price[^>]*total-price[^>]*>(\d{1,3}(?:,\d{3})+)', html)
+        if match:
+            price = int(match.group(1).replace(',', ''))
+    
+    # 방법 3: 정규식 가격 패턴 (첫 번째 만원 이상 가격)
+    if not price:
+        all_prices = re.findall(r'(\d{1,3}(?:,\d{3})+)원', html[:50000])
+        for p in all_prices:
+            val = int(p.replace(',', ''))
+            if 5000 < val < 500000:
+                price = val
+                break
+    
+    # 상품명 추출
+    title_match = re.search(r'<title[^>]*>([^<]+)</title>', html)
+    if title_match:
+        name = title_match.group(1).strip()
+        name = re.sub(r'\s*[-|]\s*쿠팡!?\s*$', '', name)
+    
+    if price:
+        return {"success": True, "price": price, "name": name, "url": url}
+    else:
+        return {"success": False, "error": "가격을 찾을 수 없습니다", "url": url}
+
+
+def _crawl_with_scrape_do(clean_url, api_key):
+    """Scrape.do로 크롤링 (super=true, 10크레딧)"""
+    import requests as http_req
+    from urllib.parse import quote
+    
+    encoded_url = quote(clean_url, safe='')
+    response = http_req.get(
+        f'https://api.scrape.do?token={api_key}&url={encoded_url}&super=true',
+        timeout=90
+    )
+    
+    if response.status_code == 200 and len(response.text) > 5000:
+        # 봇 차단 페이지 감지
+        if 'akamai' in response.text[:3000].lower() or 'Access denied' in response.text[:3000]:
+            return None, "Scrape.do: Akamai 봇 차단"
+        return response.text, None
+    else:
+        return None, f"Scrape.do: status={response.status_code}, len={len(response.text)}"
+
+
+def _crawl_with_scraperapi(clean_url, api_key, use_premium=False):
+    """ScraperAPI로 크롤링"""
+    import requests as http_req
+    
+    params = {
+        "api_key": api_key,
+        "url": clean_url,
+        "country_code": "kr"
+    }
+    if use_premium:
+        params["premium"] = "true"
+    
+    response = http_req.get(
+        "https://api.scraperapi.com",
+        params=params,
+        timeout=90
+    )
+    
+    if response.status_code == 200 and len(response.text) > 1000:
+        return response.text, None
+    else:
+        return None, f"ScraperAPI: status={response.status_code}, len={len(response.text)}"
+
+
 def crawl_coupang_price(url, use_premium=False):
-    """쿠팡 상품 페이지에서 가격 크롤링 (ScraperAPI 경유)
+    """쿠팡 상품 페이지에서 가격 크롤링
+    
+    순서: Scrape.do (super) → ScraperAPI → ScraperAPI (premium)
     
     Args:
         url: 쿠팡 상품 URL
-        use_premium: True면 premium 프록시 사용 (10크레딧)
+        use_premium: True면 ScraperAPI premium 프록시 사용
     
     Returns:
-        dict: {success: bool, price: int, name: str, error: str}
+        dict: {success: bool, price: int, name: str, error: str, source: str}
     """
     config = load_config()
-    scraper_api_key = config.get('global_settings', {}).get('scraper_api_key', '') if config else ''
+    global_settings = config.get('global_settings', {}) if config else {}
+    scrape_do_key = global_settings.get('scrape_do_api_key', '')
+    scraper_api_key = global_settings.get('scraper_api_key', '')
     
-    if not scraper_api_key:
-        return {"success": False, "error": "ScraperAPI 키가 설정되지 않음. config > global_settings > scraper_api_key"}
+    if not scrape_do_key and not scraper_api_key:
+        return {"success": False, "error": "크롤링 API 키가 설정되지 않음 (scrape_do_api_key 또는 scraper_api_key)"}
     
     try:
-        import requests as http_req
         from urllib.parse import urlparse, urlunparse
         
-        # URL 정리: query 파라미터 제거 (ScraperAPI가 쿠팡 URL에 params 있으면 실패)
+        # URL 정리: query 파라미터 제거
         parsed = urlparse(url)
         clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
         print(f"[CRAWL] URL: {clean_url}")
         
-        # ScraperAPI 호출
-        response = None
-        params = {
-            "api_key": scraper_api_key,
-            "url": clean_url,
-            "country_code": "kr"
-        }
-        if use_premium:
-            params["premium"] = "true"
-            print(f"[CRAWL] Premium 프록시 사용 (10크레딧)")
+        # 1순위: Scrape.do (super=true)
+        if scrape_do_key:
+            try:
+                print(f"[CRAWL] Scrape.do (super) 시도...")
+                html, error = _crawl_with_scrape_do(clean_url, scrape_do_key)
+                if html:
+                    result = _extract_price_from_html(html, url)
+                    result['source'] = 'scrape.do'
+                    if result['success']:
+                        print(f"[CRAWL] ✅ Scrape.do 성공: {result['price']:,}원")
+                        return result
+                    else:
+                        print(f"[CRAWL] Scrape.do 페이지 OK but 가격 못 찾음")
+                else:
+                    print(f"[CRAWL] Scrape.do 실패: {error}")
+            except Exception as e:
+                print(f"[CRAWL] Scrape.do 예외: {e}")
         
-        try:
-            response = http_req.get(
-                "https://api.scraperapi.com",
-                params=params,
-                timeout=90
-            )
-        except Exception as req_err:
-            print(f"[CRAWL] Request failed: {req_err}")
+        # 2순위: ScraperAPI
+        if scraper_api_key:
+            try:
+                premium_flag = use_premium
+                print(f"[CRAWL] ScraperAPI {'(premium)' if premium_flag else '(일반)'} 시도...")
+                html, error = _crawl_with_scraperapi(clean_url, scraper_api_key, premium_flag)
+                if html:
+                    result = _extract_price_from_html(html, url)
+                    result['source'] = f"scraperapi{'_premium' if premium_flag else ''}"
+                    if result['success']:
+                        print(f"[CRAWL] ✅ ScraperAPI 성공: {result['price']:,}원")
+                        return result
+                    else:
+                        print(f"[CRAWL] ScraperAPI 페이지 OK but 가격 못 찾음")
+                else:
+                    print(f"[CRAWL] ScraperAPI 실패: {error}")
+            except Exception as e:
+                print(f"[CRAWL] ScraperAPI 예외: {e}")
         
-        if not response or response.status_code != 200:
-            status = response.status_code if response else 'no response'
-            body_preview = response.text[:200] if response else ''
-            print(f"[CRAWL] ScraperAPI 실패 - status:{status}, body:{body_preview}")
-            return {"success": False, "error": f"ScraperAPI 응답: {status}", "status_code": status, "url": url}
-        
-        if len(response.text) < 1000:
-            print(f"[CRAWL] 페이지 너무 짧음 ({len(response.text)}자) - 차단 가능성")
-            return {"success": False, "error": f"페이지 내용이 너무 짧음 ({len(response.text)}자, 차단 가능성)", "url": url}
-        
-        # 가격 추출 - final-price-amount 클래스 (쿠팡 2026년 구조)
-        price = None
-        name = ""
-        
-        # 방법 1: final-price-amount 클래스 (최우선)
-        match = re.search(r'final-price-amount[^>]*>(\d{1,3}(?:,\d{3})+)원', response.text)
-        if match:
-            price = int(match.group(1).replace(',', ''))
-        
-        # 방법 2: prod-sale-price (구 구조)
-        if not price:
-            match = re.search(r'prod-sale-price[^>]*total-price[^>]*>(\d{1,3}(?:,\d{3})+)', response.text)
-            if match:
-                price = int(match.group(1).replace(',', ''))
-        
-        # 방법 3: 정규식 가격 패턴 (첫 번째 만원 이상 가격)
-        if not price:
-            all_prices = re.findall(r'(\d{1,3}(?:,\d{3})+)원', response.text[:50000])
-            for p in all_prices:
-                val = int(p.replace(',', ''))
-                if 5000 < val < 500000:
-                    price = val
-                    break
-        
-        # 상품명 추출
-        title_match = re.search(r'<title[^>]*>([^<]+)</title>', response.text)
-        if title_match:
-            name = title_match.group(1).strip()
-            # " - 쿠팡!" 제거
-            name = re.sub(r'\s*[-|]\s*쿠팡!?\s*$', '', name)
-        
-        if price:
-            return {
-                "success": True,
-                "price": price,
-                "name": name,
-                "url": url
-            }
-        else:
-            return {
-                "success": False,
-                "error": "가격을 찾을 수 없습니다",
-                "url": url
-            }
+        return {"success": False, "error": "모든 크롤링 서비스 실패", "url": url}
     
     except Exception as e:
         return {"success": False, "error": f"크롤링 오류: {str(e)}", "url": url}

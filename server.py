@@ -1177,7 +1177,7 @@ def crawl_coupang_price(url, use_premium=False):
         return {"success": False, "error": f"크롤링 오류: {str(e)}", "url": url}
 
 
-def crawl_competitor_prices(product_group):
+def crawl_competitor_prices(product_group, silent_jandi=False):
     """제품 그룹의 모든 경쟁사 가격 크롤링 (재시도 포함)
     
     Args:
@@ -1230,11 +1230,12 @@ def crawl_competitor_prices(product_group):
             print(f"[CRAWL] ⚠️ {competitor.get('name')} 크롤링 {MAX_RETRIES}회 실패. 이전 가격 유지: {old_price:,}원")
             result['old_price_kept'] = old_price
             
-            send_jandi_notification(
-                f"⚠️ [{group_name}] 경쟁사 크롤링 실패",
-                f"{competitor.get('name')}: {MAX_RETRIES}회 시도 실패\n오류: {result.get('error', '알 수 없음')}\n\n이전 가격 {old_price:,}원으로 유지됩니다.\n수동 확인 필요: {url}",
-                "yellow"
-            )
+            if not silent_jandi:
+                send_jandi_notification(
+                    f"⚠️ [{group_name}] 경쟁사 크롤링 실패",
+                    f"{competitor.get('name')}: {MAX_RETRIES}회 시도 실패\n오류: {result.get('error', '알 수 없음')}\n\n이전 가격 {old_price:,}원으로 유지됩니다.\n수동 확인 필요: {url}",
+                    "yellow"
+                )
         
         results.append(result)
         
@@ -2385,6 +2386,11 @@ def cleanup_coupons_api(group_key):
 
 @app.route('/api/product-groups/<group_key>/apply-prices', methods=['POST'])
 def apply_group_prices(group_key):
+    """API 엔드포인트 (UI에서 호출 시 잔디 알림 포함)"""
+    return _apply_group_prices_core(group_key, silent_jandi=False)
+
+
+def _apply_group_prices_core(group_key, silent_jandi=False):
     """제품 그룹의 1+3+6병 전체 쿠폰 발행 (기존 쿠폰 파기 포함)"""
     config = load_config()
     if not config:
@@ -2589,11 +2595,12 @@ def apply_group_prices(group_key):
     if not results:
         error_msg = f"처리된 상품이 없습니다. vendor_item_id 설정을 확인하세요."
         log_action("APPLY_PRICES", f"가격 적용 실패: {group_key} - {error_msg}")
-        send_jandi_notification(
-            f"🚨 {group_name} 쿠폰 발행 실패",
-            f"처리된 상품 0개 — vendor_item_id가 설정되지 않았거나 상품 데이터가 없습니다.\n\n관리자 확인 필요",
-            "red"
-        )
+        if not silent_jandi:
+            send_jandi_notification(
+                f"🚨 {group_name} 쿠폰 발행 실패",
+                f"처리된 상품 0개 — vendor_item_id가 설정되지 않았거나 상품 데이터가 없습니다.\n\n관리자 확인 필요",
+                "red"
+            )
         return jsonify({
             "success": False,
             "error": error_msg,
@@ -2613,33 +2620,33 @@ def apply_group_prices(group_key):
     
     log_action("APPLY_PRICES", f"가격 적용: {group_key} ({success_count}/{len(results)}개 성공, {fail_count}개 실패, {blocked_count}개 차단)", results)
     
-    # 잔디 알림
-    if success_count > 0:
-        body = "\n".join([
-            f"✅ {r['product']}: 판매가 {r.get('actual_sale_price', 0):,} → 할인 {r.get('discount_amount', 0):,} → 최종 {r.get('expected_final_price', 0):,}원"
-            for r in results if r.get('success')
-        ])
-        if blocked_count > 0:
-            body += f"\n\n🔒 고정 쿠폰 차단: {blocked_count}개 (수동 해제 필요)"
-        if cancelled_coupons:
-            body += f"\n🗑️ 기존 쿠폰 {len(cancelled_coupons)}개 파기됨"
-        send_jandi_notification(
-            f"🎫 {group_name} 쿠폰 발행",
-            body,
-            "green" if success_count == len(results) else "yellow"
-        )
-    
-    # 실패가 있으면 잔디 경고 알림
-    if fail_count > 0:
-        fail_body = "\n".join([
-            f"❌ {r['product']}: {r.get('error', '알 수 없는 오류')}"
-            for r in results if not r.get('success')
-        ])
-        send_jandi_notification(
-            f"⚠️ {group_name} 쿠폰 발행 실패 ({fail_count}건)",
-            fail_body,
-            "red"
-        )
+    # 잔디 알림 (수동 호출 시만, 자동 체크 시에는 통합 메시지로 발송)
+    if not silent_jandi:
+        if success_count > 0:
+            body = "\n".join([
+                f"✅ {r['product']}: 판매가 {r.get('actual_sale_price', 0):,} → 할인 {r.get('discount_amount', 0):,} → 최종 {r.get('expected_final_price', 0):,}원"
+                for r in results if r.get('success')
+            ])
+            if blocked_count > 0:
+                body += f"\n\n🔒 고정 쿠폰 차단: {blocked_count}개 (수동 해제 필요)"
+            if cancelled_coupons:
+                body += f"\n🗑️ 기존 쿠폰 {len(cancelled_coupons)}개 파기됨"
+            send_jandi_notification(
+                f"🎫 {group_name} 쿠폰 발행",
+                body,
+                "green" if success_count == len(results) else "yellow"
+            )
+        
+        if fail_count > 0:
+            fail_body = "\n".join([
+                f"❌ {r['product']}: {r.get('error', '알 수 없는 오류')}"
+                for r in results if not r.get('success')
+            ])
+            send_jandi_notification(
+                f"⚠️ {group_name} 쿠폰 발행 실패 ({fail_count}건)",
+                fail_body,
+                "red"
+            )
     
     return jsonify({
         "success": overall_success,
@@ -4248,7 +4255,7 @@ def _do_auto_check_all():
         
         old_prices = {c.get('id', ''): c.get('last_price', 0) for c in competitors}
         
-        crawl_results = crawl_competitor_prices(group)
+        crawl_results = crawl_competitor_prices(group, silent_jandi=True)
         save_config(config)  # 크롤링 결과 저장
         
         success_count = sum(1 for r in crawl_results if r['success'])
@@ -4260,7 +4267,7 @@ def _do_auto_check_all():
             old_prices_kept = [f"{r.get('competitor_name')}: {r.get('old_price_kept', 0):,}원" for r in crawl_results]
             group_result['crawl'] = f"0/{len(crawl_results)} ⚠️ 이전 가격 유지"
         
-        # 가격 변동 확인
+        # 가격 변동 확인 (잔디는 통합 메시지에서 발송)
         for r in crawl_results:
             if r['success']:
                 comp_id = r.get('competitor_id', '')
@@ -4269,18 +4276,13 @@ def _do_auto_check_all():
                 if old_price > 0 and new_price != old_price:
                     group_result['price_changed'] = True
                     change_pct = round((new_price - old_price) / old_price * 100, 1)
-                    
-                    send_jandi_notification(
-                        f"🔍 [{group_name}] 경쟁사 가격 변동!",
-                        f"{r.get('competitor_name','')}: {old_price:,}원 → {new_price:,}원 ({change_pct:+.1f}%)",
-                        "yellow"
-                    )
+                    group_result['price_change_detail'] = f"{r.get('competitor_name','')}: {old_price:,}→{new_price:,}원 ({change_pct:+.1f}%)"
         
         # 2단계: auto_mode ON이면 쿠폰 재발행
         if group.get('auto_mode'):
             try:
                 with app.test_request_context():
-                    apply_response = apply_group_prices(group_key)
+                    apply_response = _apply_group_prices_core(group_key, silent_jandi=True)
                     # Flask Response에서 JSON 추출
                     if hasattr(apply_response, 'get_json'):
                         apply_data = apply_response.get_json()
@@ -4322,6 +4324,9 @@ def _do_auto_check_all():
     
     checked_at = format_kst_datetime()
     
+    # ==================== 잔디 통합 요약 (1건) ====================
+    _send_cycle_summary_jandi(all_results, checked_at)
+    
     # 이메일: 15분 후 쿠팡 쿠폰 적용 여부 검증 후 발송 (백그라운드)
     _start_delayed_verification(all_results, checked_at, config)
     
@@ -4336,6 +4341,75 @@ def _do_auto_check_all():
 COUPON_VERIFY_DELAY_SECONDS = 15 * 60  # 15분
 COUPON_RETRY_DELAY_SECONDS = 30 * 60   # 30분
 COUPON_MAX_RETRIES = 2                  # 최대 재시도 횟수
+
+
+def _send_cycle_summary_jandi(all_results, checked_at):
+    """자동 체크 사이클 통합 잔디 요약 (1건)"""
+    lines = []
+    has_error = False
+    has_warning = False
+    
+    # 크롤링 결과
+    crawl_parts = []
+    for gk, gr in all_results.items():
+        name = gr.get('name', gk)
+        crawl = gr.get('crawl', '-')
+        if gr.get('crawl_failed'):
+            crawl_parts.append(f"{name}: ❌ 실패")
+            has_warning = True
+        elif 'success' in str(crawl):
+            # 경쟁사 가격 추출
+            crawl_parts.append(f"{name}: ✅ {crawl}")
+        else:
+            crawl_parts.append(f"{name}: {crawl}")
+    if crawl_parts:
+        lines.append("📊 크롤링: " + " | ".join(crawl_parts))
+    
+    # 가격 변동
+    changes = []
+    for gk, gr in all_results.items():
+        if gr.get('price_changed') and gr.get('price_change_detail'):
+            changes.append(gr['price_change_detail'])
+    if changes:
+        lines.append("📈 가격변동: " + " | ".join(changes))
+    
+    # 쿠폰 발행 결과
+    coupon_parts = []
+    for gk, gr in all_results.items():
+        name = gr.get('name', gk)
+        if not gr.get('auto_mode'):
+            coupon_parts.append(f"{name}: ⏸ OFF")
+            continue
+        
+        if gr.get('applied'):
+            detail = gr.get('apply_detail', '성공')
+            if gr.get('partial_fail'):
+                coupon_parts.append(f"{name}: ⚠️ {detail}")
+                has_warning = True
+            else:
+                coupon_parts.append(f"{name}: ✅ {detail}")
+        else:
+            error = gr.get('apply_error', '실패')
+            coupon_parts.append(f"{name}: ❌ {error[:30]}")
+            has_error = True
+    if coupon_parts:
+        lines.append("🎫 쿠폰: " + " | ".join(coupon_parts))
+    
+    lines.append(f"\n⏰ 15분 후 검증 예정")
+    
+    body = "\n".join(lines)
+    
+    if has_error:
+        color = "red"
+        title = f"⚠️ [가격관리] 자동 체크 ({checked_at})"
+    elif has_warning:
+        color = "yellow"
+        title = f"[가격관리] 자동 체크 ({checked_at})"
+    else:
+        color = "green"
+        title = f"✅ [가격관리] 자동 체크 ({checked_at})"
+    
+    send_jandi_notification(title, body, color)
 
 
 def _start_delayed_verification(all_results, checked_at, config):
@@ -4386,16 +4460,18 @@ def _start_delayed_verification(all_results, checked_at, config):
                     
                     # 실패 그룹 있음
                     if retry_count >= COUPON_MAX_RETRIES:
-                        # 최대 재시도 초과 → 긴급 알림 + 이메일
+                        # 최대 재시도 초과 → 긴급 알림 1건 + 이메일
                         print(f"[VERIFY] ❌ 최대 재시도 {COUPON_MAX_RETRIES}회 초과 — 사람 확인 필요")
                         
-                        for gk, gr in failed_groups.items():
-                            details = '\n'.join(gr.get('verify_details', []))
-                            send_jandi_notification(
-                                f"🚨 [{gr.get('name', gk)}] 쿠폰 {COUPON_MAX_RETRIES}회 재시도 후에도 실패!",
-                                f"자동 복구 불가 — 담당자 수동 확인 필요\n\n{details}",
-                                "red"
-                            )
+                        fail_summary = "\n".join([
+                            f"❌ {gr.get('name', gk)}: {gr.get('verify_status', '실패')}"
+                            for gk, gr in failed_groups.items()
+                        ])
+                        send_jandi_notification(
+                            f"🚨 [가격관리] 쿠폰 {COUPON_MAX_RETRIES}회 재시도 후 최종 실패",
+                            f"자동 복구 불가 — 담당자 수동 확인 필요\n\n{fail_summary}",
+                            "red"
+                        )
                         
                         subject, text, html = build_verified_email(verified_results, checked_at, verified_at)
                         send_email_notification(subject, text, html)
@@ -4406,12 +4482,7 @@ def _start_delayed_verification(all_results, checked_at, config):
                     retry_count += 1
                     failed_names = ', '.join(gr.get('name', gk) for gk, gr in failed_groups.items())
                     print(f"[VERIFY] ⚠️ 실패 그룹: {failed_names} → {COUPON_RETRY_DELAY_SECONDS//60}분 후 재발행 (재시도 {retry_count}/{COUPON_MAX_RETRIES})")
-                    
-                    send_jandi_notification(
-                        f"⚠️ 쿠폰 검증 실패 → {COUPON_RETRY_DELAY_SECONDS//60}분 후 자동 재발행 ({retry_count}/{COUPON_MAX_RETRIES})",
-                        f"실패 그룹: {failed_names}\n자동 재발행을 시도합니다.",
-                        "yellow"
-                    )
+                    log_action("VERIFY_RETRY", f"재발행 시도 {retry_count}/{COUPON_MAX_RETRIES}: {failed_names}")
                     
                     _time.sleep(COUPON_RETRY_DELAY_SECONDS)
                     
@@ -4420,7 +4491,7 @@ def _start_delayed_verification(all_results, checked_at, config):
                     for gk in failed_groups:
                         try:
                             with app.test_request_context():
-                                apply_response = apply_group_prices(gk)
+                                apply_response = _apply_group_prices_core(gk, silent_jandi=True)
                                 if hasattr(apply_response, 'get_json'):
                                     apply_data = apply_response.get_json()
                                 else:

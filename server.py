@@ -4221,7 +4221,7 @@ def _start_delayed_verification(all_results, checked_at, config):
 
 
 def _verify_coupon_application(all_results, config):
-    """쿠팡 API로 각 그룹별 쿠폰 활성 여부 검증"""
+    """쿠팡 API로 각 그룹별 쿠폰 활성 여부 검증 (쿠폰명 매칭 방식)"""
     api = CoupangAPI(config)
     
     # 현재 활성 쿠폰 전체 조회
@@ -4230,51 +4230,58 @@ def _verify_coupon_application(all_results, config):
     if coupons_response.get('success'):
         data = coupons_response.get('data', {})
         if isinstance(data, dict):
-            active_coupons = data.get('content', [])
+            inner = data.get('data', data)
+            if isinstance(inner, dict):
+                active_coupons = inner.get('content', [])
+            elif isinstance(inner, list):
+                active_coupons = inner
         elif isinstance(data, list):
             active_coupons = data
     
-    # vendorItemId → 활성 쿠폰 매핑
-    coupon_by_item = {}
-    for c in active_coupons:
-        for vid in (c.get('vendorItemIds') or []):
-            coupon_by_item[str(vid)] = {
-                'coupon_id': c.get('couponId'),
-                'title': c.get('title', ''),
-                'discount': c.get('discountValue', 0),
-                'status': c.get('couponStatus', '')
-            }
+    print(f"[VERIFY] 활성 쿠폰 {len(active_coupons)}개 조회됨")
     
     groups = config.get('product_groups', {})
     
     for group_key, gr in all_results.items():
         if not gr.get('applied'):
-            # 발행 시도 안 한 경우 검증 스킵
             gr['verify_status'] = '발행 안 함'
             gr['verify_ok'] = None
             continue
         
         group_config = groups.get(group_key, {})
+        coupon_name = group_config.get('coupon_name', group_config.get('name', ''))
         products = group_config.get('products', {})
         
         verified = 0
         failed = 0
         details = []
         
+        bottle_labels = {'1bottle': '1병', '3bottle': '3병', '6bottle': '6병'}
+        
         for pk in ['1bottle', '3bottle', '6bottle']:
             product = products.get(pk)
             if not product or not product.get('vendor_item_id'):
                 continue
             
-            vid = str(product['vendor_item_id'])
-            coupon_info = coupon_by_item.get(vid)
+            label = bottle_labels.get(pk, pk)
             
-            if coupon_info:
+            # 쿠폰명에 그룹명+병수가 포함된 활성 쿠폰 찾기
+            found = None
+            for c in active_coupons:
+                c_name = c.get('promotionName', c.get('title', ''))
+                c_status = c.get('status', c.get('couponStatus', ''))
+                
+                if c_status == 'APPLIED' and coupon_name in c_name and label in c_name:
+                    found = c
+                    break
+            
+            if found:
+                discount = found.get('discount', found.get('discountValue', 0))
                 verified += 1
-                details.append(f"✅ {product.get('name', pk)}: 쿠폰 활성 (할인 {coupon_info['discount']:,}원)")
+                details.append(f"✅ {product.get('name', pk)}: 쿠폰 활성 (할인 {int(discount):,}원, ID:{found.get('couponId')})")
             else:
                 failed += 1
-                details.append(f"❌ {product.get('name', pk)}: 쿠폰 미적용 (vid:{vid})")
+                details.append(f"❌ {product.get('name', pk)}: 쿠폰 미적용 ('{coupon_name} {label}' 패턴 미발견)")
         
         total = verified + failed
         if total == 0:
@@ -4288,6 +4295,7 @@ def _verify_coupon_application(all_results, config):
             gr['verify_ok'] = False
         
         gr['verify_details'] = details
+        print(f"[VERIFY] {group_key}: {gr['verify_status']} {details}")
     
     return all_results
 

@@ -4199,6 +4199,8 @@ def generate_ai_insight(group_key):
 # ==================== 전체 자동화 ====================
 
 _auto_check_lock = threading.Lock()
+_auto_check_running_since = None  # 타임스탬프 기반 중복 방지
+_AUTO_CHECK_MAX_DURATION = 600    # 최대 10분 — 이 이상이면 이전 실행 stuck으로 판단
 
 @app.route('/api/auto-check-all', methods=['GET', 'POST'])
 def auto_check_all():
@@ -4217,9 +4219,28 @@ def auto_check_all():
     if not _auto_check_lock.acquire(blocking=False):
         return jsonify({"message": "이미 실행 중입니다", "executed": False, "skipped": True})
     
+    global _auto_check_running_since
+    
+    # 이전 실행이 stuck인지 확인 (10분 초과면 강제 해제)
+    if _auto_check_running_since:
+        import time as _t
+        elapsed = _t.time() - _auto_check_running_since
+        if elapsed < _AUTO_CHECK_MAX_DURATION:
+            _auto_check_lock.release()
+            return jsonify({"message": f"이미 실행 중 ({int(elapsed)}초 경과)", "executed": False, "skipped": True})
+        else:
+            print(f"[AUTO_CHECK] 이전 실행이 {int(elapsed)}초 동안 stuck — 강제 진행")
+    
+    _auto_check_running_since = __import__('time').time()
+    
     try:
-        return _do_auto_check_all()
+        result = _do_auto_check_all()
+        return result
+    except Exception as e:
+        print(f"[AUTO_CHECK] 치명적 오류: {e}")
+        return jsonify({"error": str(e), "executed": False}), 500
     finally:
+        _auto_check_running_since = None
         _auto_check_lock.release()
 
 

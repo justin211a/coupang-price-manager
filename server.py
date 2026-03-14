@@ -1122,11 +1122,16 @@ def crawl_coupang_price(url, use_premium=False):
         return {"success": False, "error": "크롤링 API 키가 설정되지 않음 (scrape_do_api_key 또는 scraper_api_key)"}
     
     try:
-        from urllib.parse import urlparse, urlunparse
+        from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
         
-        # URL 정리: query 파라미터 제거
+        # URL 정리: vendorItemId만 유지, 나머지 params 제거
         parsed = urlparse(url)
-        clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+        params = parse_qs(parsed.query)
+        keep_params = {}
+        if 'vendorItemId' in params:
+            keep_params['vendorItemId'] = params['vendorItemId'][0]
+        clean_query = urlencode(keep_params)
+        clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', clean_query, ''))
         print(f"[CRAWL] URL: {clean_url}")
         
         # 1순위: Scrape.do (super=true)

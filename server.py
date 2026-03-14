@@ -2412,8 +2412,8 @@ def apply_group_prices(group_key):
         
         vendor_item_id = product['vendor_item_id']
         config_original_price = product.get('original_price', 0)
-        min_price = product.get('min_price', 0)
-        max_price = product.get('max_price', 999999)
+        min_price = product.get('min_price', 0) or 0
+        max_price = product.get('max_price', 0) or 999999  # 0이면 미설정 = 제한 없음
         
         # ★★★ 핵심: 쿠팡 WING API로 실제 판매가 조회 ★★★
         inventory = api.get_inventory(vendor_item_id)

@@ -1717,13 +1717,7 @@ def create_product_group():
         "price_direction": "lower",
         "discount_hours": 4,
         "check_interval_minutes": 240,
-        "pack3_extra_discount": 3,
-        "pack6_extra_discount": 7,
-        "products": group_data.get('products', {
-            "1bottle": {"name": "1개입", "vendor_item_id": 0, "original_price": 0, "current_price": 0, "min_price": 0, "max_price": 0},
-            "3bottle": {"name": "3개입", "vendor_item_id": 0, "original_price": 0, "current_price": 0, "min_price": 0, "max_price": 0},
-            "6bottle": {"name": "6개입", "vendor_item_id": 0, "original_price": 0, "current_price": 0, "min_price": 0, "max_price": 0}
-        }),
+        "products": group_data.get('products', {}),
         "competitors": group_data.get('competitors', [])
     }
     
@@ -1779,6 +1773,74 @@ def update_product_group(group_key):
     return jsonify({
         "success": True,
         "key": group_key,
+        "group": groups[group_key]
+    })
+
+
+@app.route('/api/product-groups/<group_key>/products', methods=['POST'])
+def add_product_to_group(group_key):
+    """그룹에 상품 옵션 추가 (예: 2bottle)"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    
+    groups = config.get('product_groups', {})
+    if group_key not in groups:
+        return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
+    
+    data = request.json
+    multiplier = data.get('multiplier', 1)
+    product_key = f"{multiplier}bottle"
+    
+    if 'products' not in groups[group_key]:
+        groups[group_key]['products'] = {}
+    
+    if product_key in groups[group_key]['products']:
+        return jsonify({"error": f"이미 존재하는 상품: {product_key}"}), 400
+    
+    groups[group_key]['products'][product_key] = {
+        "name": data.get('name', f"{multiplier}개입"),
+        "vendor_item_id": data.get('vendor_item_id', 0),
+        "original_price": data.get('original_price', 0),
+        "current_price": 0,
+        "min_price": data.get('min_price', 0),
+        "max_price": data.get('max_price', 0),
+        "multiplier": multiplier,
+        "extra_discount": data.get('extra_discount', 0)
+    }
+    
+    save_config(config)
+    log_action("PRODUCT_ADD", f"상품 추가: {group_key}/{product_key}", data)
+    
+    return jsonify({
+        "success": True,
+        "product_key": product_key,
+        "group": groups[group_key]
+    })
+
+
+@app.route('/api/product-groups/<group_key>/products/<product_key>', methods=['DELETE'])
+def remove_product_from_group(group_key, product_key):
+    """그룹에서 상품 옵션 삭제"""
+    config = load_config()
+    if not config:
+        return jsonify({"error": "설정 파일이 없습니다"}), 404
+    
+    groups = config.get('product_groups', {})
+    if group_key not in groups:
+        return jsonify({"error": f"제품 그룹을 찾을 수 없습니다: {group_key}"}), 404
+    
+    products = groups[group_key].get('products', {})
+    if product_key not in products:
+        return jsonify({"error": f"존재하지 않는 상품: {product_key}"}), 404
+    
+    removed = products.pop(product_key)
+    save_config(config)
+    log_action("PRODUCT_REMOVE", f"상품 삭제: {group_key}/{product_key}", removed)
+    
+    return jsonify({
+        "success": True,
+        "removed": product_key,
         "group": groups[group_key]
     })
 
@@ -2322,17 +2384,31 @@ def apply_group_prices(group_key):
     # ==================== 2단계: 새 쿠폰 발행 ====================
     results = []
     
-    # 1bottle, 3bottle, 6bottle
-    product_configs = [
-        ('1bottle', 1, 0),
-        ('3bottle', 3, group.get('pack3_extra_discount', 0)),
-        ('6bottle', 6, group.get('pack6_extra_discount', 0))
-    ]
+    # 동적 상품 목록 (multiplier 기준 정렬)
+    def _get_multiplier(pk, pv):
+        """product key에서 multiplier 추출 (하위호환)"""
+        if 'multiplier' in pv:
+            return pv['multiplier']
+        # key에서 숫자 추출 (예: '3bottle' → 3)
+        m = re.search(r'(\d+)', pk)
+        return int(m.group(1)) if m else 1
     
-    for product_key, multiplier, extra_discount in product_configs:
-        product = products.get(product_key)
-        if not product or not product.get('vendor_item_id'):
+    def _get_extra_discount(pk, pv, group):
+        """product에서 extra_discount 추출 (하위호환)"""
+        if 'extra_discount' in pv:
+            return pv['extra_discount']
+        # 구버전 호환: 그룹 레벨 pack{N}_extra_discount
+        mult = _get_multiplier(pk, pv)
+        return group.get(f'pack{mult}_extra_discount', 0)
+    
+    sorted_products = sorted(products.items(), key=lambda x: _get_multiplier(x[0], x[1]))
+    
+    for product_key, product in sorted_products:
+        if not product.get('vendor_item_id'):
             continue
+        
+        multiplier = _get_multiplier(product_key, product)
+        extra_discount = _get_extra_discount(product_key, product, group)
         
         vendor_item_id = product['vendor_item_id']
         config_original_price = product.get('original_price', 0)
@@ -2703,9 +2779,13 @@ def test_connection():
     
     if groups and active_key and active_key in groups:
         products = groups[active_key].get('products', {})
-        if '1bottle' in products:
-            vendor_item_id = products['1bottle'].get('vendor_item_id')
-            product_name = f"{groups[active_key].get('name', '')} 1개입"
+        # 첫 번째 상품 (multiplier 기준 정렬)
+        sorted_prods = sorted(products.items(), key=lambda x: x[1].get('multiplier', int(re.search(r'(\d+)', x[0]).group(1)) if re.search(r'(\d+)', x[0]) else 1))
+        for pk, pv in sorted_prods:
+            if pv.get('vendor_item_id'):
+                vendor_item_id = pv['vendor_item_id']
+                product_name = f"{groups[active_key].get('name', '')} {pv.get('name', pk)}"
+                break
     
     # 기존 구조 폴백
     if not vendor_item_id:
@@ -3934,8 +4014,9 @@ def generate_ai_insight(group_key):
     group = groups[group_key]
     products = group.get('products', {})
     
-    # 1병 기준 데이터 추출
-    product_1 = products.get('1bottle', {})
+    # 최소 병수 상품 기준 데이터 추출
+    sorted_prods = sorted(products.items(), key=lambda x: x[1].get('multiplier', int(re.search(r'(\d+)', x[0]).group(1)) if re.search(r'(\d+)', x[0]) else 1))
+    product_1 = sorted_prods[0][1] if sorted_prods else {}
     current_price = product_1.get('current_price', 0) or product_1.get('original_price', 0)
     original_price = product_1.get('original_price', 0)
     min_price = product_1.get('min_price', 0)
@@ -4307,14 +4388,15 @@ def _verify_coupon_application(all_results, config):
         failed = 0
         details = []
         
-        bottle_labels = {'1bottle': '1병', '3bottle': '3병', '6bottle': '6병'}
+        # 동적 상품 목록 (multiplier 기준 정렬)
+        sorted_prods = sorted(products.items(), key=lambda x: x[1].get('multiplier', int(re.search(r'(\d+)', x[0]).group(1)) if re.search(r'(\d+)', x[0]) else 1))
         
-        for pk in ['1bottle', '3bottle', '6bottle']:
-            product = products.get(pk)
-            if not product or not product.get('vendor_item_id'):
+        for pk, product in sorted_prods:
+            if not product.get('vendor_item_id'):
                 continue
             
-            label = bottle_labels.get(pk, pk)
+            mult = product.get('multiplier', int(re.search(r'(\d+)', pk).group(1)) if re.search(r'(\d+)', pk) else 1)
+            label = f"{mult}병"
             
             # 쿠폰명에 그룹명+병수가 포함된 활성 쿠폰 찾기
             found = None

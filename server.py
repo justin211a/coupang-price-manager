@@ -1113,7 +1113,7 @@ def crawl_coupang_price(url):
 
 
 def crawl_competitor_prices(product_group):
-    """제품 그룹의 모든 경쟁사 가격 크롤링
+    """제품 그룹의 모든 경쟁사 가격 크롤링 (재시도 포함)
     
     Args:
         product_group: 제품 그룹 설정 dict
@@ -1121,22 +1121,53 @@ def crawl_competitor_prices(product_group):
     Returns:
         list: 각 경쟁사의 크롤링 결과
     """
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5  # seconds
+    
     results = []
     competitors = product_group.get('competitors', [])
+    group_name = product_group.get('name', '')
     
     for competitor in competitors:
         url = competitor.get('url')
         if not url:
             continue
         
-        result = crawl_coupang_price(url)
-        result['competitor_id'] = competitor.get('id', '')
-        result['competitor_name'] = competitor.get('name', '')
+        result = None
+        
+        # 최대 3회 재시도
+        for attempt in range(1, MAX_RETRIES + 1):
+            result = crawl_coupang_price(url)
+            result['competitor_id'] = competitor.get('id', '')
+            result['competitor_name'] = competitor.get('name', '')
+            
+            if result['success']:
+                # 크롤링된 가격이 0이면 실패 처리
+                if result.get('price', 0) <= 0:
+                    result['success'] = False
+                    result['error'] = '크롤링된 가격이 0원 (비정상)'
+                else:
+                    break  # 성공하면 루프 탈출
+            
+            if attempt < MAX_RETRIES:
+                print(f"[CRAWL] {competitor.get('name')} 재시도 {attempt}/{MAX_RETRIES}... ({result.get('error', '')})")
+                time_module.sleep(RETRY_DELAY)
         
         if result['success']:
             # 가격 업데이트
             competitor['last_price'] = result['price']
             competitor['last_checked'] = format_kst_datetime()
+        else:
+            # 3회 실패 시 경고
+            old_price = competitor.get('last_price', 0)
+            print(f"[CRAWL] ⚠️ {competitor.get('name')} 크롤링 {MAX_RETRIES}회 실패. 이전 가격 유지: {old_price:,}원")
+            result['old_price_kept'] = old_price
+            
+            send_jandi_notification(
+                f"⚠️ [{group_name}] 경쟁사 크롤링 실패",
+                f"{competitor.get('name')}: {MAX_RETRIES}회 시도 실패\n오류: {result.get('error', '알 수 없음')}\n\n이전 가격 {old_price:,}원으로 유지됩니다.\n수동 확인 필요: {url}",
+                "yellow"
+            )
         
         results.append(result)
         
@@ -4074,6 +4105,12 @@ def _do_auto_check_all():
         
         success_count = sum(1 for r in crawl_results if r['success'])
         group_result['crawl'] = f"{success_count}/{len(crawl_results)} success"
+        
+        # 크롤링 전체 실패 경고
+        if success_count == 0 and len(crawl_results) > 0:
+            group_result['crawl_failed'] = True
+            old_prices_kept = [f"{r.get('competitor_name')}: {r.get('old_price_kept', 0):,}원" for r in crawl_results]
+            group_result['crawl'] = f"0/{len(crawl_results)} ⚠️ 이전 가격 유지"
         
         # 가격 변동 확인
         for r in crawl_results:

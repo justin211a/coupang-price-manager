@@ -1057,11 +1057,34 @@ def crawl_coupang_price(url):
         except Exception as req_err:
             print(f"[CRAWL] Request failed: {req_err}")
         
+        # 일반 프록시 실패 시 premium 프록시로 재시도 (10크레딧)
         if not response or response.status_code != 200:
-            return {"success": False, "error": f"ScraperAPI 응답: {response.status_code if response else 'no response'}", "url": url}
+            print(f"[CRAWL] 일반 프록시 실패 ({response.status_code if response else 'no response'}), premium 프록시로 재시도...")
+            try:
+                response = http_req.get(
+                    "https://api.scraperapi.com",
+                    params={
+                        "api_key": scraper_api_key,
+                        "url": clean_url,
+                        "country_code": "kr",
+                        "premium": "true"
+                    },
+                    timeout=90
+                )
+                if response and response.status_code == 200:
+                    print(f"[CRAWL] Premium 프록시 성공 ({len(response.text)}자)")
+            except Exception as req_err:
+                print(f"[CRAWL] Premium request also failed: {req_err}")
+        
+        if not response or response.status_code != 200:
+            status = response.status_code if response else 'no response'
+            body_preview = response.text[:200] if response else ''
+            print(f"[CRAWL] ScraperAPI 실패 - status:{status}, body:{body_preview}")
+            return {"success": False, "error": f"ScraperAPI 응답: {status}", "status_code": status, "url": url}
         
         if len(response.text) < 1000:
-            return {"success": False, "error": "페이지 내용이 너무 짧음 (차단 가능성)", "url": url}
+            print(f"[CRAWL] 페이지 너무 짧음 ({len(response.text)}자) - 차단 가능성")
+            return {"success": False, "error": f"페이지 내용이 너무 짧음 ({len(response.text)}자, 차단 가능성)", "url": url}
         
         # 가격 추출 - final-price-amount 클래스 (쿠팡 2026년 구조)
         price = None
@@ -1122,7 +1145,7 @@ def crawl_competitor_prices(product_group):
         list: 각 경쟁사의 크롤링 결과
     """
     MAX_RETRIES = 3
-    RETRY_DELAY = 5  # seconds
+    RETRY_DELAYS = [15, 30, 60]  # 점진적 증가: 15초, 30초, 60초
     
     results = []
     competitors = product_group.get('competitors', [])
@@ -1150,8 +1173,9 @@ def crawl_competitor_prices(product_group):
                     break  # 성공하면 루프 탈출
             
             if attempt < MAX_RETRIES:
-                print(f"[CRAWL] {competitor.get('name')} 재시도 {attempt}/{MAX_RETRIES}... ({result.get('error', '')})")
-                time_module.sleep(RETRY_DELAY)
+                delay = RETRY_DELAYS[attempt - 1] if attempt - 1 < len(RETRY_DELAYS) else RETRY_DELAYS[-1]
+                print(f"[CRAWL] {competitor.get('name')} 재시도 {attempt}/{MAX_RETRIES}... {delay}초 후 ({result.get('error', '')})")
+                time_module.sleep(delay)
         
         if result['success']:
             # 가격 업데이트

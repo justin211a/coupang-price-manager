@@ -4329,75 +4329,133 @@ def _do_auto_check_all():
 
 
 COUPON_VERIFY_DELAY_SECONDS = 15 * 60  # 15분
+COUPON_RETRY_DELAY_SECONDS = 30 * 60   # 30분
+COUPON_MAX_RETRIES = 2                  # 최대 재시도 횟수
 
 
 def _start_delayed_verification(all_results, checked_at, config):
-    """백그라운드 스레드로 15분 후 쿠폰 적용 검증 + 이메일 발송"""
+    """백그라운드 스레드: 15분 후 검증 → 실패 시 30분 후 재발행+검증 (최대 2회)"""
     
-    # GCS에 검증 대기 상태 저장 (컨테이너 재시작 안전장치)
+    # GCS에 검증 대기 상태 저장
     try:
-        pending = {
+        save_to_gcs({
             'all_results': all_results,
             'checked_at': checked_at,
             'verify_after': format_kst_datetime(offset_minutes=15),
             'status': 'pending'
-        }
-        save_to_gcs(pending, 'pending_verification.json')
-        print("[VERIFY] 검증 대기 상태 GCS 저장 완료")
+        }, 'pending_verification.json')
     except Exception as e:
-        print(f"[VERIFY] GCS 저장 실패 (계속 진행): {e}")
+        print(f"[VERIFY] GCS 저장 실패: {e}")
     
     def _delayed_verify():
         import time as _time
         
-        delay = COUPON_VERIFY_DELAY_SECONDS
-        print(f"[VERIFY] {delay//60}분 후 쿠폰 적용 검증 예정...")
-        _time.sleep(delay)
+        current_results = all_results
+        retry_count = 0
         
-        print("[VERIFY] 쿠폰 적용 검증 시작")
+        # === 1단계: 최초 15분 후 검증 ===
+        print(f"[VERIFY] {COUPON_VERIFY_DELAY_SECONDS//60}분 후 검증 예정...")
+        _time.sleep(COUPON_VERIFY_DELAY_SECONDS)
         
         try:
             with app.app_context():
-                verified_results = _verify_coupon_application(all_results, config)
-                verified_at = format_kst_datetime()
+                while True:
+                    print(f"[VERIFY] 쿠폰 검증 시작 (시도 {retry_count + 1}/{COUPON_MAX_RETRIES + 1})")
+                    
+                    # 최신 config 로드
+                    fresh_config = load_config()
+                    verified_results = _verify_coupon_application(current_results, fresh_config)
+                    verified_at = format_kst_datetime()
+                    
+                    # 실패 그룹 확인
+                    failed_groups = {gk: gr for gk, gr in verified_results.items() 
+                                    if gr.get('verify_ok') == False and gr.get('auto_mode', False)}
+                    
+                    if not failed_groups:
+                        # 전부 성공 → 이메일 발송
+                        print(f"[VERIFY] ✅ 전체 검증 통과!")
+                        subject, text, html = build_verified_email(verified_results, checked_at, verified_at)
+                        send_email_notification(subject, text, html)
+                        log_action("VERIFY_COMPLETE", f"쿠폰 검증 완료 (재시도 {retry_count}회)", verified_results)
+                        break
+                    
+                    # 실패 그룹 있음
+                    if retry_count >= COUPON_MAX_RETRIES:
+                        # 최대 재시도 초과 → 긴급 알림 + 이메일
+                        print(f"[VERIFY] ❌ 최대 재시도 {COUPON_MAX_RETRIES}회 초과 — 사람 확인 필요")
+                        
+                        for gk, gr in failed_groups.items():
+                            details = '\n'.join(gr.get('verify_details', []))
+                            send_jandi_notification(
+                                f"🚨 [{gr.get('name', gk)}] 쿠폰 {COUPON_MAX_RETRIES}회 재시도 후에도 실패!",
+                                f"자동 복구 불가 — 담당자 수동 확인 필요\n\n{details}",
+                                "red"
+                            )
+                        
+                        subject, text, html = build_verified_email(verified_results, checked_at, verified_at)
+                        send_email_notification(subject, text, html)
+                        log_action("VERIFY_FAILED", f"쿠폰 검증 최종 실패 (재시도 {retry_count}회)", verified_results)
+                        break
+                    
+                    # === 재발행 시도 ===
+                    retry_count += 1
+                    failed_names = ', '.join(gr.get('name', gk) for gk, gr in failed_groups.items())
+                    print(f"[VERIFY] ⚠️ 실패 그룹: {failed_names} → {COUPON_RETRY_DELAY_SECONDS//60}분 후 재발행 (재시도 {retry_count}/{COUPON_MAX_RETRIES})")
+                    
+                    send_jandi_notification(
+                        f"⚠️ 쿠폰 검증 실패 → {COUPON_RETRY_DELAY_SECONDS//60}분 후 자동 재발행 ({retry_count}/{COUPON_MAX_RETRIES})",
+                        f"실패 그룹: {failed_names}\n자동 재발행을 시도합니다.",
+                        "yellow"
+                    )
+                    
+                    _time.sleep(COUPON_RETRY_DELAY_SECONDS)
+                    
+                    # 실패 그룹만 재발행
+                    print(f"[VERIFY] 재발행 시작 ({retry_count}/{COUPON_MAX_RETRIES})")
+                    for gk in failed_groups:
+                        try:
+                            with app.test_request_context():
+                                apply_response = apply_group_prices(gk)
+                                if hasattr(apply_response, 'get_json'):
+                                    apply_data = apply_response.get_json()
+                                else:
+                                    apply_data = apply_response
+                                
+                                ok = sum(1 for r in apply_data.get('results', []) if r.get('success'))
+                                total = len(apply_data.get('results', []))
+                                print(f"[VERIFY] 재발행 {gk}: {ok}/{total}")
+                                
+                                current_results[gk]['applied'] = apply_data.get('success', False)
+                                current_results[gk]['apply_detail'] = f"{ok}/{total} coupons re-issued (retry {retry_count})"
+                        except Exception as e:
+                            print(f"[VERIFY] 재발행 실패 {gk}: {e}")
+                            current_results[gk]['apply_error'] = str(e)
+                    
+                    # 재발행 후 15분 검증 대기
+                    print(f"[VERIFY] 재발행 완료 → {COUPON_VERIFY_DELAY_SECONDS//60}분 후 재검증...")
+                    _time.sleep(COUPON_VERIFY_DELAY_SECONDS)
                 
-                # 검증 실패 시 잔디 긴급 알림
-                for gk, gr in verified_results.items():
-                    if gr.get('verify_ok') == False:
-                        details = '\n'.join(gr.get('verify_details', []))
-                        send_jandi_notification(
-                            f"🚨 [{gr.get('name', gk)}] 쿠폰 적용 실패 감지!",
-                            f"15분 검증 결과 쿠팡에서 쿠폰이 활성화되지 않았습니다.\n\n{details}\n\n수동 확인 필요",
-                            "red"
-                        )
-                
-                # 검증 결과로 이메일 발송
-                subject, text, html = build_verified_email(verified_results, checked_at, verified_at)
-                send_email_notification(subject, text, html)
-                
-                log_action("VERIFY_COMPLETE", f"쿠폰 검증 완료 + 이메일 발송", verified_results)
-                
-                # GCS 검증 대기 상태 삭제
+                # GCS 상태 업데이트
                 try:
-                    save_to_gcs({'status': 'completed', 'verified_at': verified_at}, 'pending_verification.json')
+                    save_to_gcs({'status': 'completed', 'verified_at': format_kst_datetime(), 'retries': retry_count}, 'pending_verification.json')
                 except:
                     pass
+                    
         except Exception as e:
-            print(f"[VERIFY] 검증 실패: {e}")
-            # 검증 실패해도 발행 결과 기반으로 이메일 발송 (검증 실패 표시)
+            print(f"[VERIFY] 검증 프로세스 오류: {e}")
             try:
-                for gk in all_results:
-                    all_results[gk]['verify_status'] = f'검증 실패: {str(e)[:50]}'
-                    all_results[gk]['verify_ok'] = False
-                subject, text, html = build_verified_email(all_results, checked_at, format_kst_datetime())
+                for gk in current_results:
+                    current_results[gk]['verify_status'] = f'검증 오류: {str(e)[:50]}'
+                    current_results[gk]['verify_ok'] = False
+                subject, text, html = build_verified_email(current_results, checked_at, format_kst_datetime())
                 send_email_notification(subject, text, html)
             except Exception as e2:
-                print(f"[VERIFY] 이메일 발송도 실패: {e2}")
-                send_jandi_notification("🚨 [긴급] 쿠폰 검증 + 이메일 발송 실패", f"오류: {str(e)}\n이메일 오류: {str(e2)}", "red")
+                print(f"[VERIFY] 이메일도 실패: {e2}")
+                send_jandi_notification("🚨 [긴급] 검증 프로세스 전체 오류", f"오류: {str(e)}\n이메일: {str(e2)}", "red")
     
     t = threading.Thread(target=_delayed_verify, daemon=True)
     t.start()
-    print(f"[VERIFY] 검증 스레드 시작됨 ({COUPON_VERIFY_DELAY_SECONDS//60}분 후 실행)")
+    print(f"[VERIFY] 검증 스레드 시작 (15분 후 검증 → 실패 시 30분 후 재발행, 최대 {COUPON_MAX_RETRIES}회)")
 
 
 def _verify_coupon_application(all_results, config):

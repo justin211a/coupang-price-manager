@@ -228,6 +228,20 @@ def save_to_gcs(data, path):
     )
 
 
+def load_from_gcs(path):
+    """GCS에서 JSON 데이터 로드"""
+    try:
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(path)
+        if not blob.exists():
+            return None
+        content = blob.download_as_text()
+        return json.loads(content)
+    except Exception:
+        return None
+
+
 # ==================== 가격 이력 관리 ====================
 
 def load_price_history():
@@ -4364,6 +4378,68 @@ COUPON_RETRY_DELAY_SECONDS = 30 * 60   # 30분
 COUPON_MAX_RETRIES = 2                  # 최대 재시도 횟수
 
 
+def _is_jandi_quiet_hours():
+    """잔디 quiet hours 판단 (KST 기준)
+    
+    - 평일(월~금) 20:00~09:00: quiet (잔디 억제)
+    - 토/일: 하루 1번만 허용
+    
+    Returns:
+        tuple: (is_quiet: bool, reason: str)
+    """
+    from datetime import datetime, timezone, timedelta
+    
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(kst)
+    hour = now.hour
+    weekday = now.weekday()  # 0=월, 5=토, 6=일
+    
+    # 주말 (토/일)
+    if weekday >= 5:
+        return True, f"weekend_{now.strftime('%Y%m%d')}"
+    
+    # 평일 야간 (20:00~08:59)
+    if hour >= 20 or hour < 9:
+        return True, "weekday_night"
+    
+    # 평일 주간 (09:00~19:59)
+    return False, "business_hours"
+
+
+def _can_send_weekend_jandi():
+    """주말/휴일에 오늘 이미 잔디를 보냈는지 확인 (하루 1번 제한)
+    
+    Returns:
+        bool: True면 보낼 수 있음
+    """
+    from datetime import datetime, timezone, timedelta
+    
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).strftime('%Y-%m-%d')
+    
+    try:
+        status = load_from_gcs('jandi_weekend_status.json')
+        if status and status.get('last_sent_date') == today:
+            return False  # 오늘 이미 보냄
+    except:
+        pass
+    
+    return True
+
+
+def _mark_weekend_jandi_sent():
+    """주말 잔디 발송 기록 저장"""
+    from datetime import datetime, timezone, timedelta
+    
+    kst = timezone(timedelta(hours=9))
+    today = datetime.now(kst).strftime('%Y-%m-%d')
+    
+    try:
+        save_to_gcs({'last_sent_date': today, 'sent_at': format_kst_datetime()}, 'jandi_weekend_status.json')
+    except Exception as e:
+        print(f"[JANDI] 주말 발송 기록 저장 실패: {e}")
+
+
 def _send_cycle_summary_jandi(all_results, checked_at):
     """자동 체크 사이클 통합 잔디 요약 (1건)"""
     lines = []
@@ -4430,7 +4506,40 @@ def _send_cycle_summary_jandi(all_results, checked_at):
         color = "green"
         title = f"✅ [가격관리] 자동 체크 ({checked_at})"
     
-    send_jandi_notification(title, body, color)
+    # 잔디 quiet hours 확인
+    is_quiet, reason = _is_jandi_quiet_hours()
+    
+    if is_quiet:
+        if reason.startswith("weekend_"):
+            # 주말: 하루 1번만
+            if _can_send_weekend_jandi():
+                # 에러가 있으면 반드시 발송
+                if has_error:
+                    send_jandi_notification(title, body, color)
+                    _mark_weekend_jandi_sent()
+                    print(f"[JANDI] 주말 첫 메시지 발송 (에러 포함)")
+                else:
+                    send_jandi_notification(title, body, color)
+                    _mark_weekend_jandi_sent()
+                    print(f"[JANDI] 주말 첫 메시지 발송")
+            else:
+                if has_error:
+                    # 에러는 주말이라도 무조건 발송
+                    send_jandi_notification(title, body, color)
+                    print(f"[JANDI] 주말 추가 발송 (에러 긴급)")
+                else:
+                    print(f"[JANDI] 주말 — 오늘 이미 발송됨, 잔디 억제 (이메일만)")
+        else:
+            # 평일 야간 (20:00~09:00)
+            if has_error:
+                # 에러는 야간이라도 무조건 발송
+                send_jandi_notification(title, body, color)
+                print(f"[JANDI] 야간 긴급 발송 (에러)")
+            else:
+                print(f"[JANDI] 평일 야간 quiet hours — 잔디 억제 (이메일만)")
+    else:
+        # 평일 주간 (09:00~19:59) — 정상 발송
+        send_jandi_notification(title, body, color)
 
 
 def _start_delayed_verification(all_results, checked_at, config):

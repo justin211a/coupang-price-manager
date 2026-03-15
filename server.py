@@ -4214,35 +4214,29 @@ def generate_ai_insight(group_key):
 
 # ==================== 전체 자동화 ====================
 
-_auto_check_lock = threading.Lock()
-_auto_check_running_since = None  # 타임스탬프 기반 중복 방지
+_auto_check_running_since = None  # 타임스탬프 기반 중복 방지 (lock 대신)
 _AUTO_CHECK_MAX_DURATION = 600    # 최대 10분 — 이 이상이면 이전 실행 stuck으로 판단
 
 @app.route('/api/auto-check-all', methods=['GET', 'POST'])
 def auto_check_all():
-    """전체 자동화 엔드포인트 (Cloud Scheduler 2시간마다 호출)
+    """전체 자동화 엔드포인트 (Cloud Scheduler 4시간마다 호출)
     
     각 그룹별로:
-    1. 경쟁사 가격 크롤링 (ScraperAPI)
-    2. 가격 변동 감지 → 잔디 알림
+    1. 경쟁사 가격 크롤링 (Scrape.do)
+    2. 가격 변동 감지
     3. auto_mode ON인 그룹 → 쿠폰 자동 재발행
     
     Cloud Scheduler 설정:
-    - URL: https://coupang-price-manager-xxx.run.app/api/auto-check-all
-    - Method: POST
-    - Frequency: 0 */2 9-22 * * (09~22시, 2시간마다)
+    - URL: /api/auto-check-all
+    - Frequency: 0 */4 * * * (24시간, 4시간마다)
     """
-    if not _auto_check_lock.acquire(blocking=False):
-        return jsonify({"message": "이미 실행 중입니다", "executed": False, "skipped": True})
-    
     global _auto_check_running_since
     
-    # 이전 실행이 stuck인지 확인 (10분 초과면 강제 해제)
+    # 중복 실행 방지 (타임스탬프 기반, deadlock 불가능)
     if _auto_check_running_since:
         import time as _t
         elapsed = _t.time() - _auto_check_running_since
         if elapsed < _AUTO_CHECK_MAX_DURATION:
-            _auto_check_lock.release()
             return jsonify({"message": f"이미 실행 중 ({int(elapsed)}초 경과)", "executed": False, "skipped": True})
         else:
             print(f"[AUTO_CHECK] 이전 실행이 {int(elapsed)}초 동안 stuck — 강제 진행")
@@ -4257,7 +4251,6 @@ def auto_check_all():
         return jsonify({"error": str(e), "executed": False}), 500
     finally:
         _auto_check_running_since = None
-        _auto_check_lock.release()
 
 
 def _do_auto_check_all():

@@ -2918,6 +2918,13 @@ def test_jandi():
     return jsonify({"success": success})
 
 
+@app.route('/api/reset-weekend-jandi', methods=['POST'])
+def reset_weekend_jandi():
+    """주말 잔디 발송 기록 초기화"""
+    save_to_gcs({'last_sent_date': '1970-01-01', 'reset_at': format_kst_datetime()}, 'jandi_weekend_status.json')
+    return jsonify({"success": True, "message": "주말 잔디 기록 초기화 완료"})
+
+
 # ==================== 계약서 API ====================
 
 @app.route('/api/contracts', methods=['GET'])

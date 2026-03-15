@@ -362,7 +362,7 @@ function renderStatusBanner() {
         return;
     }
 
-    // 전체 비교 (쿠팡 판매가 = original_price vs 경쟁사*병수) — 동적
+    // 전체 비교 (쿠폰 적용 후 최종가 vs 경쟁사*병수) — 동적
     const bottles = Object.entries(prods)
         .map(([key, p]) => ({ key, label: `${p.multiplier || parseInt(key) || 1}병`, mult: p.multiplier || parseInt(key) || 1, p }))
         .sort((a, b) => a.mult - b.mult);
@@ -375,7 +375,12 @@ function renderStatusBanner() {
         const p = b.p;
         if (!p || !p.original_price) return;
         totalItems++;
-        const ourPrice = p.original_price;
+        const extra = p.extra_discount != null ? p.extra_discount : (b.mult === 1 ? 0 : (g[`pack${b.mult}_extra_discount`] || 0));
+        const base = dir === 'lower' ? compPrice - gap : compPrice + gap;
+        let target = base * b.mult;
+        if (extra > 0) target = Math.round(target * (1 - extra / 100) / 10) * 10;
+        target = Math.max(p.min_price || 0, Math.min(p.max_price || 999999, target));
+        const ourPrice = target;  // 쿠폰 적용 후 최종가
         const theirPrice = compPrice * b.mult;
         const diff = ourPrice - theirPrice;
         if (diff > 0) {
@@ -410,7 +415,7 @@ function renderStatusBanner() {
     c.innerHTML = `
         <div class="flex items-center gap-3 mb-3"><span class="text-3xl">${icon}</span>
             <div><p class="font-bold ${titleColor} text-lg">${titleText}</p>
-            <p class="text-gray-400 text-sm">경쟁사 1병 기준가: ${fmt(compPrice)}원 (쿠폰 적용 전 비교)</p></div>
+            <p class="text-gray-400 text-sm">경쟁사 1병 기준가: ${fmt(compPrice)}원 (쿠폰 적용 후 비교)</p></div>
         </div>
         <div class="flex flex-wrap gap-1">${detailHtml}</div>
     `;

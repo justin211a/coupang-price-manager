@@ -363,6 +363,8 @@ function renderStatusBanner() {
     }
 
     // 전체 비교 (쿠폰 적용 후 최종가 vs 경쟁사*병수) — 동적
+    const gap = g.price_gap || 1000;
+    const dir = g.price_direction || 'lower';
     const bottles = Object.entries(prods)
         .map(([key, p]) => ({ key, label: `${p.multiplier || parseInt(key) || 1}병`, mult: p.multiplier || parseInt(key) || 1, p }))
         .sort((a, b) => a.mult - b.mult);

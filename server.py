@@ -854,12 +854,7 @@ def is_quiet_hours():
 
 
 def send_jandi_notification(title, body, color="blue"):
-    """잔디 웹훅으로 알림 전송"""
-    # 야간 모드: 한국 시간 23:00 ~ 09:00에는 알림 전송 안 함
-    if is_quiet_hours():
-        print(f"[야간 모드] 잔디 알림 스킵 (23:00~09:00): {title}")
-        return True  # 성공으로 처리 (에러 아님)
-    
+    """잔디 웹훅으로 알림 전송 (quiet hours 체크는 caller에서 관리)"""
     config = load_config()
     if not config:
         return False
@@ -4513,18 +4508,14 @@ def _send_cycle_summary_jandi(all_results, checked_at):
         if reason.startswith("weekend_"):
             # 주말: 하루 1번만
             if _can_send_weekend_jandi():
-                # 에러가 있으면 반드시 발송
-                if has_error:
-                    send_jandi_notification(title, body, color)
+                sent = send_jandi_notification(title, body, color)
+                if sent:
                     _mark_weekend_jandi_sent()
-                    print(f"[JANDI] 주말 첫 메시지 발송 (에러 포함)")
+                    print(f"[JANDI] 주말 첫 메시지 발송 {'(에러 포함)' if has_error else ''}")
                 else:
-                    send_jandi_notification(title, body, color)
-                    _mark_weekend_jandi_sent()
-                    print(f"[JANDI] 주말 첫 메시지 발송")
+                    print(f"[JANDI] 주말 첫 메시지 발송 실패 — 다음 사이클에 재시도")
             else:
                 if has_error:
-                    # 에러는 주말이라도 무조건 발송
                     send_jandi_notification(title, body, color)
                     print(f"[JANDI] 주말 추가 발송 (에러 긴급)")
                 else:

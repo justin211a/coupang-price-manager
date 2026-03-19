@@ -36,7 +36,8 @@ jobs:
           --vpc-connector coupang-connector \
           --vpc-egress all-traffic \
           --no-cpu-throttling \
-          --timeout 300
+          --timeout 300 \
+          --set-env-vars "SECRET_KEY=4e09594e650104afa200080384f81ebb216500f239d911e2fbb8050b04f6e2e0"
 
     - name: Post-deploy - Trigger scheduled check
       run: |

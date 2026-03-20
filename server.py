@@ -853,8 +853,20 @@ def is_quiet_hours():
     return hour >= 23 or hour < 9
 
 
-def send_jandi_notification(title, body, color="blue"):
-    """잔디 웹훅으로 알림 전송 (quiet hours 체크는 caller에서 관리)"""
+def send_jandi_notification(title, body, color="blue", force=False):
+    """잔디 웹훅으로 알림 전송
+    
+    Quiet hours (KST):
+    - 평일 20:00~09:00, 주말: 잔디 억제
+    - 단, color="red" (에러) 또는 force=True는 항상 발송
+    """
+    # quiet hours 체크 (에러/강제가 아닌 경우만)
+    if not force and color != "red":
+        is_quiet, reason = _is_jandi_quiet_hours()
+        if is_quiet:
+            print(f"[JANDI] quiet hours 억제 ({reason}): {title}")
+            return True  # 성공으로 처리 (에러 아님)
+    
     config = load_config()
     if not config:
         return False
@@ -4348,7 +4360,7 @@ def _send_cycle_summary_jandi(all_results, checked_at):
         if reason.startswith("weekend_"):
             # 주말: 하루 1번만
             if _can_send_weekend_jandi():
-                sent = send_jandi_notification(title, body, color)
+                sent = send_jandi_notification(title, body, color, force=True)
                 if sent:
                     _mark_weekend_jandi_sent()
                     print(f"[JANDI] 주말 첫 메시지 발송 {'(에러 포함)' if has_error else ''}")
@@ -4356,7 +4368,7 @@ def _send_cycle_summary_jandi(all_results, checked_at):
                     print(f"[JANDI] 주말 첫 메시지 발송 실패 — 다음 사이클에 재시도")
             else:
                 if has_error:
-                    send_jandi_notification(title, body, color)
+                    send_jandi_notification(title, body, color, force=True)
                     print(f"[JANDI] 주말 추가 발송 (에러 긴급)")
                 else:
                     print(f"[JANDI] 주말 — 오늘 이미 발송됨, 잔디 억제 (이메일만)")
@@ -4364,13 +4376,13 @@ def _send_cycle_summary_jandi(all_results, checked_at):
             # 평일 야간 (20:00~09:00)
             if has_error:
                 # 에러는 야간이라도 무조건 발송
-                send_jandi_notification(title, body, color)
+                send_jandi_notification(title, body, color, force=True)
                 print(f"[JANDI] 야간 긴급 발송 (에러)")
             else:
                 print(f"[JANDI] 평일 야간 quiet hours — 잔디 억제 (이메일만)")
     else:
         # 평일 주간 (09:00~19:59) — 정상 발송
-        send_jandi_notification(title, body, color)
+        send_jandi_notification(title, body, color, force=True)
 
 
 def _start_delayed_verification(all_results, checked_at, config):

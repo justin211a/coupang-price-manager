@@ -6,7 +6,7 @@
     "base_url": "https://api-gateway.coupang.com"
   },
   "global_settings": {
-    "jandi_webhook": "https://wh.jandi.com/connect-api/webhook/18891904/0afe7bcc161e91ead2a9297c2d242ad0",
+    "slack_webhook": "ENV:SLACK_WEBHOOK_URL",
     "coupon_budget": 500000,
     "coupon_used": 0,
     "contract_id": "173582",

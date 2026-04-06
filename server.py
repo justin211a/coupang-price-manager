@@ -844,7 +844,7 @@ class CoupangAPI:
         return {'cancelled': cancelled, 'blocked': blocked}
 
 
-# ==================== 잔디 알림 ====================
+# ==================== 슬랙 알림 (잔디에서 전환) ====================
 
 def is_quiet_hours():
     """야간 시간 체크 (한국 시간 23:00 ~ 09:00)"""
@@ -854,27 +854,26 @@ def is_quiet_hours():
 
 
 def send_jandi_notification(title, body, color="blue", force=False):
-    """잔디 웹훅으로 알림 전송
+    """슬랙 웹훅으로 알림 전송 (함수명은 호환성을 위해 유지)
     
     Quiet hours (KST):
-    - 평일 20:00~09:00, 주말: 잔디 억제
+    - 평일 20:00~09:00, 주말: 알림 억제
     - 단, color="red" (에러) 또는 force=True는 항상 발송
     """
     # quiet hours 체크 (에러/강제가 아닌 경우만)
     if not force and color != "red":
         is_quiet, reason = _is_jandi_quiet_hours()
         if is_quiet:
-            print(f"[JANDI] quiet hours 억제 ({reason}): {title}")
+            print(f"[SLACK] quiet hours 억제 ({reason}): {title}")
             return True  # 성공으로 처리 (에러 아님)
     
     config = load_config()
     if not config:
         return False
     
-    # 새 구조 / 구 구조 호환
     webhook_url = get_jandi_webhook(config)
     if not webhook_url:
-        print("잔디 웹훅 URL이 설정되지 않음")
+        print("슬랙 웹훅 URL이 설정되지 않음")
         return False
     
     color_map = {
@@ -885,11 +884,11 @@ def send_jandi_notification(title, body, color="blue", force=False):
     }
     
     payload = {
-        "body": title,
-        "connectColor": color_map.get(color, "#3498DB"),
-        "connectInfo": [{
+        "text": title,
+        "attachments": [{
+            "color": color_map.get(color, "#3498DB"),
             "title": "상세",
-            "description": body
+            "text": body
         }]
     }
     
@@ -898,12 +897,12 @@ def send_jandi_notification(title, body, color="blue", force=False):
         req = urllib.request.Request(
             webhook_url,
             data=data,
-            headers={"Content-Type": "application/json", "Accept": "application/vnd.tosslab.jandi-v2+json"}
+            headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             return response.status == 200
     except Exception as e:
-        print(f"잔디 알림 실패: {e}")
+        print(f"슬랙 알림 실패: {e}")
         return False
 
 
@@ -1289,13 +1288,21 @@ def get_active_product_group(config):
 
 
 def get_jandi_webhook(config):
-    """잔디 웹훅 URL 반환 (새/구 구조 호환)"""
-    # 새 구조
+    """슬랙/잔디 웹훅 URL 반환 (환경변수 우선 → config 파일)"""
+    # 환경변수 우선
+    env_url = os.environ.get('SLACK_WEBHOOK_URL')
+    if env_url:
+        return env_url
+    # config에서 읽기 (새 구조)
     if 'global_settings' in config:
-        return config['global_settings'].get('jandi_webhook')
+        url = config['global_settings'].get('slack_webhook') or config['global_settings'].get('jandi_webhook')
+        if url and not url.startswith('ENV:'):
+            return url
     # 구 구조
     if 'settings' in config:
-        return config['settings'].get('jandi_webhook')
+        url = config['settings'].get('slack_webhook') or config['settings'].get('jandi_webhook')
+        if url and not url.startswith('ENV:'):
+            return url
     return None
 
 

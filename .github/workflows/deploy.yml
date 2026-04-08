@@ -36,6 +36,7 @@ jobs:
           --vpc-connector coupang-connector \
           --vpc-egress all-traffic \
           --no-cpu-throttling \
+          --min-instances=1 \
           --timeout 300 \
           --set-env-vars "SECRET_KEY=4e09594e650104afa200080384f81ebb216500f239d911e2fbb8050b04f6e2e0"
 

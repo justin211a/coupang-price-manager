@@ -933,7 +933,8 @@ def _replace_4byte_emoji(text):
 
 
 def send_email_notification(subject, body_text, html_body=None):
-    """Apps Script 웹 앱을 통한 이메일 알림 발송"""
+    """Apps Script 웹 앱을 통한 이메일 알림 발송 — 현재 비활성화 (Slack으로 대체)"""
+    return True  # 이메일 비활성화 — Slack 알림으로 충분
     config = load_config()
     if not config:
         return False

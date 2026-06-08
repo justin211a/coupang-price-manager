@@ -64,8 +64,8 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.9"
-BUILD_DATE = "2026-03-12"
+APP_VERSION = "33.10"
+BUILD_DATE = "2026-06-08"
 
 # 한국 시간대 (UTC+9)
 KST = timezone(timedelta(hours=9))
@@ -108,6 +108,7 @@ ALLOWED_EMAILS = [
     'jun@terabiotech.com',
     'andrew@terabiotech.com',
     'reina@terabiotech.com',
+    'mira@terabiotech.com',
 ]
 
 # 인증 필요 여부 (개발 시 False로 설정 가능)

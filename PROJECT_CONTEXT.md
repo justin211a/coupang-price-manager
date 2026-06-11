@@ -230,13 +230,16 @@ HMAC-SHA256 서명. `CEA algorithm=HmacSHA256, access-key={AK}, signed-date={dat
 - contract_id 도 계정별 (`resolve_contract_id`). account 그룹인데 그 계정에 contract_id 없으면 발행 차단 (글로벌 fallback 금지).
 - 적용 지점: sync-prices / cleanup-coupons / apply-prices(auto-check-all 포함) / update-original-prices / debug apply flow. 수동·전역 엔드포인트(/api/test, /api/contracts, /api/budget, instant-coupon 수동 발행)는 기본 노바트라 유지.
 
-**테라 활성화 전 필요 (대표님만 가능)**:
-1. 쿠팡 WING **테라 계정**에서 OpenAPI 키 발급 (access/secret) + Vendor ID 확인
-2. 테라 WING 에 고정 IP **34.22.68.152** 등록
-3. 테라 계정 쿠폰 예산 계약(contract_id) 생성 후 `/api/contracts` 로 ID 확인
-4. config.json 에 `accounts.tera` 추가 + 테라 제품 그룹 등록 (vendorItemId·경쟁사 URL 은 안보미 과장 협의)
+**테라 연결 완료 (2026-06-11 실측 검증)**:
+- 업체코드 **C00687677** (TERABIOTECH INC, terabio01). C 프리픽스 = 로켓직구/글로벌 셀러.
+- contract_id **142661** (기존 활성 쿠폰 10개 — 프라임 NMN 1~6병, 스페르미딘·베르베린·피세틴·마그네슘 1병 — 에서 확인).
+- `/api/coupons?account=tera` 200 OK — 키·고정IP·vendor 전부 검증 완료. 자격증명은 GCS config.json `accounts.tera` (레포에 없음).
+- 기존 활성 쿠폰이 instant-discount 타입으로 정상 운영 중 → 쿠폰 API 가 C 벤더에도 작동 확인됨.
+- ⚠️ 테라 기존 쿠폰은 수동 생성(6/5, ~12/31). 테라 그룹 자동화 시작 시 cleanup 로직이 coupon_name 매칭으로 파기 대상을 고르므로, 자동화 쿠폰 이름과 기존 수동 쿠폰 이름이 겹치지 않게 그룹 coupon_name 을 정할 것.
 
-**주의**: 로켓직구(글로벌) 상품에 마켓플레이스 즉시할인쿠폰 API 가 동일하게 작동하는지는 테라 키 확보 후 1상품 실측 검증 필요.
+**남은 활성화 단계**:
+1. 테라 제품 그룹 등록 — vendorItemId·경쟁사 URL·price_gap·min/max (안보미 과장 협의)
+2. 1개 그룹 auto_mode OFF 로 등록 → sync-prices(get_inventory) 가 C 벤더 상품에 작동하는지 실측 → apply-prices 수동 1회 → 검증 후 auto_mode ON
 
 ## 10. config.json 변경 시 주의사항
 

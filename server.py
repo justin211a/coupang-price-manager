@@ -1606,8 +1606,9 @@ def static_files(filename):
 # ==================== API 라우트 ====================
 
 @app.route('/api/config', methods=['GET'])
+@login_required
 def get_config():
-    """설정 조회"""
+    """설정 조회 (2026-06-11 login_required — WING secret 포함이라 무인증 노출 금지)"""
     config = load_config()
     if not config:
         return jsonify({"error": "Config not found"}), 404
@@ -1629,6 +1630,7 @@ def get_version():
 
 
 @app.route('/api/config/download', methods=['GET'])
+@login_required
 def download_config():
     """설정 파일 다운로드 (파일로 저장용)
     
@@ -1647,6 +1649,7 @@ def download_config():
 
 
 @app.route('/api/config/upload', methods=['POST'])
+@login_required
 def upload_config():
     """설정 파일 업로드 (전체 덮어쓰기)
     
@@ -1718,8 +1721,9 @@ def config_sync_check():
 
 
 @app.route('/api/config', methods=['POST'])
+@login_required
 def update_config():
-    """설정 업데이트 (새 구조 + 구 구조 호환)"""
+    """설정 업데이트 (새 구조 + 구 구조 호환) (2026-06-11 login_required)"""
     config = load_config()
     if not config:
         return jsonify({"error": "설정 파일이 없습니다"}), 404
@@ -2983,13 +2987,20 @@ def reset_weekend_jandi():
 
 @app.route('/api/contracts', methods=['GET'])
 def get_contracts():
-    """계약서 목록 조회 - contractId 확인용"""
+    """계약서 목록 조회 - contractId 확인용. ?account=tera 로 멀티 계정 조회 (v33.11)"""
     config = load_config()
     if not config:
         return jsonify({"error": "설정 파일이 없습니다"}), 404
-    
-    api = CoupangAPI(config)
+
+    account = request.args.get('account') or None
+    try:
+        api = CoupangAPI(config, account=account)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     result = api.get_contracts()
+    if account:
+        result['account'] = account
+        result['vendor_id'] = api.vendor_id
     return jsonify(result)
 
 

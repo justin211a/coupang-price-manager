@@ -3585,13 +3585,20 @@ def reset_coupon_usage():
 
 @app.route('/api/coupons', methods=['GET'])
 def get_coupons():
-    """쿠폰 목록"""
+    """쿠폰 목록. ?account=tera 로 멀티 계정 조회 (v33.11 — 계정 연결 실측용)"""
     config = load_config()
     if not config:
         return jsonify({"error": "설정 파일이 없습니다"}), 404
-    
-    api = CoupangAPI(config)
+
+    account = request.args.get('account') or None
+    try:
+        api = CoupangAPI(config, account=account)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     result = api.get_coupons()
+    if account:
+        result['account'] = account
+        result['vendor_id'] = api.vendor_id
     return jsonify(result)
 
 

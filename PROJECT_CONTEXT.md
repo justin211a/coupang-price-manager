@@ -203,6 +203,41 @@ HMAC-SHA256 서명. `CEA algorithm=HmacSHA256, access-key={AK}, signed-date={dat
 
 ---
 
+## 9.5. 멀티 계정 (v33.11, 2026-06-11) — 테라(TERA) 계정 확장
+
+안보미 과장 요청(2026-06-11, 대표 승인): 로켓직구 제품 대부분이 테라 계정에 등록 → 가격대응 자동화를 테라 계정에도 적용.
+
+**구조** (하위호환 — account 없는 그룹은 기존 노바트라 그대로):
+```json
+{
+  "api": { "...": "기존 노바트라 자격증명 (변경 없음)" },
+  "accounts": {
+    "tera": {
+      "access_key": "...", "secret_key": "...", "vendor_id": "A########",
+      "contract_id": 000000
+    }
+  },
+  "product_groups": {
+    "기존그룹": { "...": "account 없음 = 노바트라" },
+    "테라그룹": { "account": "tera", "...": "..." }
+  }
+}
+```
+
+**동작**:
+- `CoupangAPI.for_group(config, group)` — 그룹의 `account` 필드로 자격증명 선택.
+- 미등록 account 는 즉시 에러 (노바 자격증명 fallback 금지 — 타계정 오발행 방지).
+- contract_id 도 계정별 (`resolve_contract_id`). account 그룹인데 그 계정에 contract_id 없으면 발행 차단 (글로벌 fallback 금지).
+- 적용 지점: sync-prices / cleanup-coupons / apply-prices(auto-check-all 포함) / update-original-prices / debug apply flow. 수동·전역 엔드포인트(/api/test, /api/contracts, /api/budget, instant-coupon 수동 발행)는 기본 노바트라 유지.
+
+**테라 활성화 전 필요 (대표님만 가능)**:
+1. 쿠팡 WING **테라 계정**에서 OpenAPI 키 발급 (access/secret) + Vendor ID 확인
+2. 테라 WING 에 고정 IP **34.22.68.152** 등록
+3. 테라 계정 쿠폰 예산 계약(contract_id) 생성 후 `/api/contracts` 로 ID 확인
+4. config.json 에 `accounts.tera` 추가 + 테라 제품 그룹 등록 (vendorItemId·경쟁사 URL 은 안보미 과장 협의)
+
+**주의**: 로켓직구(글로벌) 상품에 마켓플레이스 즉시할인쿠폰 API 가 동일하게 작동하는지는 테라 키 확보 후 1상품 실측 검증 필요.
+
 ## 10. config.json 변경 시 주의사항
 
 `POST /api/config`는 **병합(merge)** 방식이지만, products 하위 키를 부분 변경하면 나머지 필드가 사라질 수 있음.

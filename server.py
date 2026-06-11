@@ -64,7 +64,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.10"
+APP_VERSION = "33.11"
 BUILD_DATE = "2026-06-08"
 
 # 한국 시간대 (UTC+9)
@@ -325,13 +325,32 @@ def get_bigquery_client():
 
 class CoupangAPI:
     """쿠팡 Open API 클라이언트"""
+
+    def __init__(self, config, account=None):
+        # 멀티 계정 (2026-06-11): account 지정 시 config['accounts'][account] 자격증명 사용.
+        # 미지정 시 config['api'](노바트라) — 기존 동작과 100% 동일.
+        # 미등록 계정은 즉시 에러 — 노바 자격증명으로 fallback 하면 타계정 상품에
+        # 엉뚱한 쿠폰이 발행되므로 절대 금지.
+        api_conf = config['api']
+        if account:
+            acct_conf = config.get('accounts', {}).get(account)
+            if not acct_conf:
+                raise ValueError(
+                    f"미등록 계정 '{account}' — config['accounts']['{account}'] 에 "
+                    f"access_key/secret_key/vendor_id 를 추가하세요")
+            api_conf = acct_conf
+        self.account = account
+        self.access_key = api_conf['access_key']
+        self.secret_key = api_conf['secret_key']
+        self.vendor_id = api_conf['vendor_id']
+        self.base_url = api_conf.get('base_url') or config['api']['base_url']
     
-    def __init__(self, config):
-        self.access_key = config['api']['access_key']
-        self.secret_key = config['api']['secret_key']
-        self.vendor_id = config['api']['vendor_id']
-        self.base_url = config['api']['base_url']
-    
+    @staticmethod
+    def for_group(config, group):
+        """그룹의 account 필드(예: 'tera')에 맞는 자격증명으로 생성.
+        account 없는 그룹 = 기존 노바트라 — 하위호환."""
+        return CoupangAPI(config, account=group.get('account'))
+
     def _generate_hmac(self, method, path, query=""):
         """HMAC 서명 생성 - GMT 시간 사용"""
         from datetime import datetime, timezone
@@ -1319,6 +1338,17 @@ def get_contract_id(config):
     return None
 
 
+def resolve_contract_id(config, group):
+    """그룹 계정에 맞는 쿠폰 예산 계약 ID (멀티 계정, 2026-06-11).
+    account 그룹인데 그 계정에 contract_id 가 없으면 None(발행 차단) —
+    글로벌 contract_id 로 fallback 하면 타계정 계약으로 쿠폰이 발행되므로 금지."""
+    account = group.get('account')
+    if account:
+        return config.get('accounts', {}).get(account, {}).get('contract_id')
+    return (config.get('global_settings', {}).get('contract_id')
+            or config.get('coupon_settings', {}).get('contract_id'))
+
+
 # ==================== 인증 라우트 ====================
 
 LOGIN_PAGE_HTML = '''<!DOCTYPE html>
@@ -2254,7 +2284,7 @@ def sync_group_prices(group_key):
     
     group = groups[group_key]
     products = group.get('products', {})
-    api = CoupangAPI(config)
+    api = CoupangAPI.for_group(config, group)
     results = []
     
     for product_key, product in products.items():
@@ -2390,8 +2420,8 @@ def cleanup_coupons_api(group_key):
     group_name = group.get('name', '')
     coupon_name = group.get('coupon_name', f"{group_name} 할인쿠폰")
     fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
-    
-    api = CoupangAPI(config)
+
+    api = CoupangAPI.for_group(config, group)
     result = cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords)
     
     cancelled = result.get('cancelled', [])
@@ -2443,13 +2473,16 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
     price_gap = group.get('price_gap', 1000)
     price_direction = group.get('price_direction', 'lower')
     discount_hours = group.get('discount_hours', 4)
-    contract_id = config.get('global_settings', {}).get('contract_id') or config.get('coupon_settings', {}).get('contract_id')
+    contract_id = resolve_contract_id(config, group)
     coupon_name = group.get('coupon_name', f"{group_name} 할인쿠폰")
-    
+
     if not contract_id:
-        return jsonify({"error": "계약서 ID가 설정되지 않았습니다"}), 400
-    
-    api = CoupangAPI(config)
+        _acct = group.get('account')
+        _msg = (f"'{_acct}' 계정의 contract_id 가 설정되지 않았습니다 (accounts.{_acct}.contract_id)"
+                if _acct else "계약서 ID가 설정되지 않았습니다")
+        return jsonify({"error": _msg}), 400
+
+    api = CoupangAPI.for_group(config, group)
     
     # ==================== 고정 쿠폰 키워드 (파기하면 안 되는 것들) ====================
     fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원']
@@ -2715,11 +2748,11 @@ def debug_apply_prices(group_key):
         steps.append({"step": 3, "name": "competitors", "count": len(competitors), "price": competitor_price})
         
         # Step 4: Contract ID
-        contract_id = config.get('global_settings', {}).get('contract_id')
+        contract_id = resolve_contract_id(config, group)
         steps.append({"step": 4, "name": "contract_id", "ok": bool(contract_id), "value": contract_id})
-        
+
         # Step 5: CoupangAPI init
-        api = CoupangAPI(config)
+        api = CoupangAPI.for_group(config, group)
         steps.append({"step": 5, "name": "CoupangAPI", "ok": True})
         
         # Step 6: Get coupons
@@ -2808,8 +2841,8 @@ def update_original_prices(group_key):
     
     if not prices:
         return jsonify({"error": "prices를 지정해주세요. 예: {\"1bottle\": 90000}"}), 400
-    
-    api = CoupangAPI(config)
+
+    api = CoupangAPI.for_group(config, groups[group_key])
     group = groups[group_key]
     products = group.get('products', {})
     results = []

@@ -21,9 +21,10 @@ BE 공식 (그룹×병수 조합별):
 
 경로 예시의 백슬래시는 문서용(raw). 코드에는 영향 없음.
 
-이번 단계(2026-07-13): DRY-RUN 전용.
-  - GCS config 는 READ 만. WRITE 금지(--apply 주어도 이번엔 안전차단 필요 시 사용).
-  - 기본 실행 = 계산표 출력 + 감사 대조. write 안 함.
+실행 모드:
+  - 기본(플래그 없음) = DRY-RUN. 계산표 출력 + 감사 대조. GCS write 안 함.
+  - --apply --allow-write = 실주입(대표 승인 2026-07-18, 가격운영 자동화 전체).
+    안전장치: 백업 후 write + generation guard + be_floor 외 키 변형 시 중단(no-write).
 
 매핑(2026-07-13 감사 확정, 이름 기반):
   config 그룹 키 → product_pricing.sku
@@ -33,10 +34,10 @@ BE 공식 (그룹×병수 조합별):
   set GOOGLE_APPLICATION_CREDENTIALS=C:\...\sa-key.json
   python be_floor_producer.py
 
-  # 실주입은 이번 단계 금지. 승인 후 main() 의 [SAFETY] 차단 라인을 제거하고:
+  # 실주입 (대표 승인 후 활성화됨):
   #   python be_floor_producer.py --apply --allow-write
 
-클로비 일일 스케줄(등록은 이번 단계 안 함 — 승인 후):
+클로비 일일 스케줄(BE_FloorProducer, 매일 11:30 — 2026-07-18 등록):
   schtasks /Create /TN "BE_FloorProducer" /SC DAILY /ST 11:30 ^
     /TR "cmd /c set GOOGLE_APPLICATION_CREDENTIALS=C:\path\sa-key.json && python C:\Dev\coupang-price-manager\be_floor_producer.py --apply --allow-write"
   # 11:30 = 자동 가격조정 사이클 이전. be_floor 를 최신화한 뒤 서비스가 읽도록.
@@ -47,6 +48,7 @@ BE 공식 (그룹×병수 조합별):
 import os
 import sys
 import json
+import copy
 import math
 import argparse
 from datetime import datetime, timezone, timedelta
@@ -264,6 +266,48 @@ def audit_cross_check(rows):
     return cnt
 
 
+BE_KEYS = ("be_floor_map", "be_floor_updated")
+
+
+def inject_floor_maps(cfg, floor_maps, now_iso):
+    """cfg 를 deep-copy 하고 각 그룹에 be_floor_map/be_floor_updated 주입.
+    floor_map 이 비어있는 그룹(매핑/원가/배송 결손)은 건드리지 않음 →
+    server.py 가 be_floor 부재로 HOLD(안전). returns (new_cfg, changed_groups)."""
+    new_cfg = copy.deepcopy(cfg)
+    changed = []
+    groups = new_cfg.get("product_groups", {})
+    for gk, fm in floor_maps.items():
+        if not fm:
+            continue
+        g = groups.get(gk)
+        if g is None:
+            continue
+        g["be_floor_map"] = fm
+        g["be_floor_updated"] = now_iso
+        changed.append(gk)
+    return new_cfg, changed
+
+
+def _strip_be_keys(cfg):
+    """be_floor_map/be_floor_updated 를 모든 그룹에서 제거한 사본 (diff 검증용)."""
+    c = copy.deepcopy(cfg)
+    for g in c.get("product_groups", {}).values():
+        if isinstance(g, dict):
+            for k in BE_KEYS:
+                g.pop(k, None)
+    return c
+
+
+def verify_diff_only_be(old_cfg, new_cfg):
+    """new_cfg 가 old_cfg 대비 be_floor 키(그룹 내 be_floor_map/be_floor_updated) 외에는
+    전혀 바뀌지 않았음을 검증. 다른 변형이 있으면 (False, 상세) 반환."""
+    old_s = json.dumps(_strip_be_keys(old_cfg), ensure_ascii=False, sort_keys=True)
+    new_s = json.dumps(_strip_be_keys(new_cfg), ensure_ascii=False, sort_keys=True)
+    if old_s == new_s:
+        return True, "OK: be_floor 관련 키 외 변경 없음"
+    return False, "DIFF: be_floor 외 키가 변경됨 (write 중단 대상)"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true",
@@ -306,10 +350,41 @@ def main():
             print(f"  {gk}: (스킵 — 매핑/원가/배송 결손)")
 
     if args.apply and args.allow_write:
-        # 이번 단계에서는 호출되지 않아야 함. 명시적 안전차단.
-        print("\n[SAFETY] --apply --allow-write 감지. 그러나 이번 단계는 write 금지 정책이라 중단.")
-        print("[SAFETY] 실주입은 별도 승인 후, 이 안전차단 라인을 제거하고 실행.")
-        return 2
+        # 대표 승인(2026-07-18, 가격운영 자동화 전체)으로 실주입 활성화.
+        # 안전장치: (1) 백업 후 write (2) generation guard (3) be_floor 외 키 변형 시 중단.
+        new_cfg, changed = inject_floor_maps(cfg, floor_maps, now_iso)
+        if not changed:
+            print("\n[APPLY] 주입 대상 그룹 없음(모든 그룹 결손) — write 스킵. 종료.")
+            return 0
+        ok, detail = verify_diff_only_be(cfg, new_cfg)
+        print(f"\n[APPLY] diff 검증: {detail}")
+        if not ok:
+            print("[APPLY][ABORT] be_floor 외 키 변형 감지 → GCS write 하지 않음.")
+            return 3
+        print(f"[APPLY] 주입 그룹({len(changed)}): {', '.join(changed)}")
+        try:
+            backup_name = write_config_to_gcs(new_cfg, generation)
+        except Exception as e:
+            print(f"[APPLY][BLOCKER] GCS write 실패: {e}")
+            print("[APPLY][BLOCKER] config 미변경(백업본 보존). 강행하지 않고 중단.")
+            return 4
+        print(f"[APPLY] GCS write 완료. 백업 = gs://{GCS_BUCKET_NAME}/{backup_name}")
+        # write 후 재검증: 실제 반영본을 다시 읽어 be_floor 외 변형 없음 재확인.
+        verify_cfg, verify_gen = load_config_from_gcs()
+        ok2, detail2 = verify_diff_only_be(cfg, verify_cfg)
+        print(f"[APPLY] write-후 재검증(원본 대비): {detail2} (new generation={verify_gen})")
+        if not ok2:
+            print("[APPLY][ALERT] 반영본에 be_floor 외 변형 감지! 백업에서 복원 권장:")
+            print(f"[APPLY][ALERT]   gsutil cp gs://{GCS_BUCKET_NAME}/{backup_name} "
+                  f"gs://{GCS_BUCKET_NAME}/{GCS_CONFIG_PATH}")
+            return 5
+        # 주입 그룹의 be_floor_map 실제 반영 확인
+        vg = verify_cfg.get("product_groups", {})
+        for gk in changed:
+            print(f"[APPLY][verify] {gk}: be_floor_map="
+                  f"{vg.get(gk, {}).get('be_floor_map')} "
+                  f"updated={vg.get(gk, {}).get('be_floor_updated')}")
+        return 0
     else:
         print("\n[DRY-RUN] GCS write 하지 않음. 계산표만 산출 완료.")
     return 0

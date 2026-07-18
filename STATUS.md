@@ -170,6 +170,7 @@
 | v33.4 | 2026-03-12 | **[CRITICAL]** 실제 판매가 기준 할인 계산 (config 정가 X) |
 | Phase A | 2026-07-18 | **[마진 하드가드]** be_floor(BQ원가 파생) 위 그룹별 `min_margin_krw`(병당 최소기여이익, 기본 0) 레버 추가. 병수 구간별 `final_price ≥ max(min_price, be_floor+min_margin×병수)` 강제, 위반 시 "손실쿠폰 차단 — 승인 필요"(알림엔 원가 수치 미표기). 순수함수 `compute_effective_floor`/`check_floor_guard` 분리·단위검증 통과. 원가는 config 아닌 BQ 유지(원가 기밀). |
 | Phase B | 2026-07-18 | **[ARTA 다계정 + 보호쿠폰 + KR3 섀도우]** ① ARTA(atv2023, vendor A01484397, contract 310615) 다계정 지원 — WING OpenAPI 키 GCS `accounts.arta`에 반영(git 평문 커밋 없음), `CoupangAPI.for_group`/`resolve_contract_id` 검증(NOVA 회귀 0, 라이브 쓰기 미실시). ② 보호쿠폰 가드 — 그룹 `protected_coupon_patterns`(이름 부분일치) 추가, `cleanup_group_coupons`·[CIR08] 자동파기에서 매칭 쿠폰 파기 스킵+로그(`_is_fixed_coupon`과 별개 레이어). ③ KR3 섀도우 — 알파CD(KAPCD)·멜라더블(KMLDB)·칼슘젤리(PRCJ) 3그룹 GCS 정본 병합(전부 enabled=false·auto_mode=false), 알파CD엔 `protected_coupon_patterns=["특가"]`. `be_floor_producer.GROUP_SKU_MAP` 매핑 추가. 단위테스트 `test_protected_coupons.py` 22/22 통과. |
+| Phase C | 2026-07-18 | **[be_floor 생산자 운영 활성화]** 대표 승인(가격운영 자동화 전체)으로 `be_floor_producer.py` 실주입(--apply --allow-write) 경로 구현·활성화. 안전장치: 백업 후 write + generation guard + `be_floor_map`/`be_floor_updated` 외 키 변형 시 write 중단(no-write)·write후 재검증. 클로비 schtask `BE_FloorProducer` 매일 11:30 등록(SYSTEM, RL HIGHEST, `py\be_floor_producer\run_clovi.bat`). 첫 실주입 1회 완료 — 14그룹 be_floor_map 주입(KAPCD=product_shipping 미비 SHIP-MISS/HOLD 정상, prime_nmn_72=MAP-MISS 스킵). diff검증 통과(be_floor 외 무변경), 백업 `backups/config-20260718-220752.json`. 활성 그룹 전부 min_price≥BE라 effective_floor=min_price로 라이브 가격 교란 0. |
 
 ---
 

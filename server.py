@@ -64,7 +64,7 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.11"
+APP_VERSION = "33.12"
 BUILD_DATE = "2026-06-08"
 
 # 한국 시간대 (UTC+9)
@@ -4276,15 +4276,24 @@ def auto_check_all():
             print(f"[AUTO_CHECK] 이전 실행이 {int(elapsed)}초 동안 stuck — 강제 진행")
     
     _auto_check_running_since = __import__('time').time()
-    
-    try:
-        result = _do_auto_check_all()
-        return result
-    except Exception as e:
-        print(f"[AUTO_CHECK] 치명적 오류: {e}")
-        return jsonify({"error": str(e), "executed": False}), 500
-    finally:
-        _auto_check_running_since = None
+
+    # 2026-06-25: 동기 실행 시 크롤+초기쿠폰발행이 수 분 걸려 Cloud Scheduler(180s)/Cloud Run(300s)
+    # 타임아웃 → 매번 504(실패 오인 + 재시도 위험). 백그라운드 스레드로 돌리고 즉시 202 반환 →
+    # 호출자(스케줄러)는 즉시 성공 수신. 실제 작업은 no-cpu-throttling+min-instances=1 환경에서 완주
+    # (15분 지연검증·이메일도 기존처럼 _start_delayed_verification 별도 스레드). 중복은 위
+    # _auto_check_running_since 가드로 방지. UI 는 이 엔드포인트를 호출하지 않음(직원 화면 영향 0).
+    def _bg_auto_check():
+        global _auto_check_running_since
+        try:
+            with app.app_context():
+                _do_auto_check_all()
+        except Exception as e:
+            print(f"[AUTO_CHECK] 치명적 오류: {e}")
+        finally:
+            _auto_check_running_since = None
+
+    threading.Thread(target=_bg_auto_check, daemon=True).start()
+    return jsonify({"message": "자동 체크 백그라운드 시작됨", "executed": True, "async": True, "success": True})
 
 
 def _do_auto_check_all():

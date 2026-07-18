@@ -82,6 +82,101 @@ def format_kst_datetime(dt=None, offset_minutes=0):
         dt = dt + timedelta(minutes=offset_minutes)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+# ==================== 동적 원가바닥(BE floor) 게이트 ====================
+# producer(be_floor_producer.py, 클로비)가 BQ 원가로 계산해 config 각 그룹에
+#   be_floor_map = {"1bottle": N, ...}  (병수 bottle key 별 손익분기 하한, 원)
+#   be_floor_updated = ISO8601 ts       (마지막 계산 시각)
+# 을 심는다. 서비스(consumer)는 아래 헬퍼로 읽어 하한을 적용한다.
+# 핵심: be_floor 없음/오래됨(stale)이면 자동 가격조정을 SKIP(HOLD) — min_price 로 조용히
+#       fallback 하지 않는다(그게 원래 사고 원인). 무결성 게이트.
+BE_FLOOR_MAX_AGE_HOURS = 48  # be_floor_updated 가 이보다 오래되면 stale → HOLD
+
+def _parse_iso_ts(s):
+    """ISO8601 문자열 → aware datetime(KST). 실패 시 None."""
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        # 'Z' 접미 대응
+        s2 = s.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s2)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=KST)
+        return dt
+    except Exception:
+        return None
+
+def get_be_floor_status(group, product_key, multiplier):
+    """
+    해당 그룹×상품의 BE floor 상태를 판정한다.
+    returns dict:
+      { "ok": bool,           # True면 be_floor 유효(적용 가능)
+        "be_floor": int|None, # 유효 시 원가바닥(원)
+        "reason": str }       # ok=False 사유 (HOLD 로그용)
+    무결성 게이트:
+      - be_floor_map 없거나 해당 bottle key 값 없음 → ok=False (누락)
+      - be_floor_updated 없거나 파싱불가 → ok=False
+      - be_floor_updated 가 BE_FLOOR_MAX_AGE_HOURS 초과로 오래됨 → ok=False (stale)
+    """
+    fmap = group.get('be_floor_map')
+    if not isinstance(fmap, dict) or not fmap:
+        return {"ok": False, "be_floor": None,
+                "reason": "be_floor_map 없음(producer 미주입)"}
+
+    be = fmap.get(product_key)
+    if be is None:
+        # bottle key 미스매치 시 multiplier 로 재시도 (하위호환: '3bottle' 등)
+        be = fmap.get(f"{multiplier}bottle")
+    if be is None:
+        return {"ok": False, "be_floor": None,
+                "reason": f"be_floor_map에 '{product_key}'(x{multiplier}) 값 없음"}
+
+    ts = _parse_iso_ts(group.get('be_floor_updated'))
+    if ts is None:
+        return {"ok": False, "be_floor": None,
+                "reason": "be_floor_updated 없음/파싱불가"}
+
+    age_h = (get_kst_now() - ts).total_seconds() / 3600.0
+    if age_h > BE_FLOOR_MAX_AGE_HOURS:
+        return {"ok": False, "be_floor": None,
+                "reason": f"be_floor stale ({age_h:.1f}h > {BE_FLOOR_MAX_AGE_HOURS}h, updated={group.get('be_floor_updated')})"}
+
+    try:
+        be_int = int(be)
+    except (TypeError, ValueError):
+        return {"ok": False, "be_floor": None,
+                "reason": f"be_floor 값 비정상: {be!r}"}
+
+    return {"ok": True, "be_floor": be_int, "reason": ""}
+
+
+# ==================== 마진 바닥선 하드 가드 (Phase A, 2026-07-18) ====================
+# be_floor(손익분기, BQ 원가 파생) 위에 그룹별 최소기여이익(min_margin_krw)을 얹어
+# "판매가 - 할인 ≥ 바닥선" 을 병수 구간(1/3/6병)별로 강제한다. 위반 시 해당 구간 발행 차단.
+# 원가 절대값은 config/알림에 두지 않는다 — be_floor(파생 바닥) + min_margin(마진 여유)만 사용.
+def compute_effective_floor(min_price, be_floor, min_margin_krw, multiplier):
+    """
+    유효 바닥선(원) = max(min_price, be_floor + min_margin_krw*병수).
+      - be_floor: 손익분기 하한(원, 병수 반영된 pack 단위). None이면 min_price로 fallback
+        (호출측은 be_floor 무효 시 이미 HOLD로 걸러야 함 — 이 함수는 순수계산만).
+      - min_margin_krw: 병당 최소기여이익(원). None/미설정 → 0 (하위호환, 순수 BE 바닥).
+    None 가드 명시(글로벌 룰).
+    """
+    mp = min_price if min_price is not None else 0
+    if be_floor is None:
+        return mp
+    mm = min_margin_krw if min_margin_krw is not None else 0
+    mult = multiplier if multiplier is not None else 1
+    margin_floor = be_floor + mm * mult
+    return max(mp, margin_floor)
+
+
+def check_floor_guard(final_price, effective_floor):
+    """할인 후 최종가가 바닥선 이상인지. (True=통과, False=차단). None 가드."""
+    if final_price is None or effective_floor is None:
+        return False
+    return final_price >= effective_floor
+
+
 # GMT 시간대 설정 (쿠팡 API HMAC용)
 os.environ['TZ'] = 'GMT+0'
 try:
@@ -2535,11 +2630,33 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
         
         multiplier = _get_multiplier(product_key, product)
         extra_discount = _get_extra_discount(product_key, product, group)
-        
+
         vendor_item_id = product['vendor_item_id']
         config_original_price = product.get('original_price', 0)
         min_price = product.get('min_price', 0) or 0
         max_price = product.get('max_price', 0) or 999999  # 0이면 미설정 = 제한 없음
+
+        # ★★★ 동적 원가바닥(BE floor) 무결성 게이트 ★★★
+        # producer 가 심은 be_floor 를 하한으로 사용. 없거나 stale 이면 자동조정 SKIP(HOLD).
+        # min_price 로 조용히 fallback 금지 — 원가 초과 상승 시 손익분기 밑 판매를 막는 게 목적.
+        be_status = get_be_floor_status(group, product_key, multiplier)
+        if not be_status["ok"]:
+            print(f"[APPLY][HOLD] {group_key}/{product_key}: BE floor 무효 → 자동 가격조정 스킵 ({be_status['reason']})")
+            results.append({
+                "product": product.get('name', product_key),
+                "success": False,
+                "hold": True,
+                "error": f"HOLD: 원가바닥(be_floor) 미확보 — {be_status['reason']}"
+            })
+            continue
+        # 하한 = max(min_price, be_floor + 최소마진). 이후 모든 하한 판정에 effective_floor 사용.
+        # min_margin_krw(병당 최소기여이익, 기본 0) 미설정 시 순수 be_floor(손익분기)와 동일 = 하위호환.
+        min_margin_krw = group.get('min_margin_krw')
+        if min_margin_krw is None:
+            min_margin_krw = 0
+        effective_floor = compute_effective_floor(
+            min_price, be_status["be_floor"], min_margin_krw, multiplier
+        )
         
         # ★★★ 핵심: 쿠팡 WING API로 실제 판매가 조회 ★★★
         inventory = api.get_inventory(vendor_item_id)
@@ -2583,9 +2700,9 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
         else:
             target_price = round(base_price / 10) * 10
         
-        # 안전장치 적용
-        target_price = max(min_price, min(max_price, target_price))
-        
+        # 안전장치 적용 (하한 = effective_floor = max(min_price, be_floor))
+        target_price = max(effective_floor, min(max_price, target_price))
+
         # ★★★ 할인금액 = 실제 쿠팡 판매가 - 목표가격 (정가 아닌 판매가 기준!) ★★★
         discount_amount = actual_sale_price - target_price
         
@@ -2598,13 +2715,18 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
             })
             continue
         
-        # 안전 검증: 할인 후 가격이 min_price 밑으로 내려가면 차단
+        # 안전 검증: 할인 후 가격이 마진 바닥선(effective_floor) 밑으로 내려가면 차단(하드 가드).
+        # 상세 수치(원가/바닥)는 내부 로그에만 — 알림엔 '바닥선 위반' 사실만(원가 기밀 룰).
         final_price = actual_sale_price - discount_amount
-        if final_price < min_price:
+        if not check_floor_guard(final_price, effective_floor):
+            print(f"[APPLY][FLOOR-BLOCK] {group_key}/{product_key}(x{multiplier}): "
+                  f"final={final_price} < floor={effective_floor} "
+                  f"(min={min_price}, be_floor={be_status['be_floor']}, min_margin={min_margin_krw})")
             results.append({
                 "product": product.get('name', product_key),
                 "success": False,
-                "error": f"최저가 위반! (판매가 {actual_sale_price:,} - 할인 {discount_amount:,} = {final_price:,} < 최저가 {min_price:,})"
+                "floor_blocked": True,
+                "error": "손실쿠폰 차단 — 승인 필요 (바닥선 위반)"
             })
             continue
         

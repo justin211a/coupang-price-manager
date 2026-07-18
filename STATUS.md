@@ -168,6 +168,7 @@
 | v33.2 | 2026-03-12 | _is_fixed_coupon 개선 — 상품명 포함 쿠폰은 고정 아님 |
 | v33.3 | 2026-03-12 | 그룹별 기존 쿠폰 자동 정리 + UI 쿠폰 정리 버튼 |
 | v33.4 | 2026-03-12 | **[CRITICAL]** 실제 판매가 기준 할인 계산 (config 정가 X) |
+| Phase A | 2026-07-18 | **[마진 하드가드]** be_floor(BQ원가 파생) 위 그룹별 `min_margin_krw`(병당 최소기여이익, 기본 0) 레버 추가. 병수 구간별 `final_price ≥ max(min_price, be_floor+min_margin×병수)` 강제, 위반 시 "손실쿠폰 차단 — 승인 필요"(알림엔 원가 수치 미표기). 순수함수 `compute_effective_floor`/`check_floor_guard` 분리·단위검증 통과. 원가는 config 아닌 BQ 유지(원가 기밀). |
 
 ---
 

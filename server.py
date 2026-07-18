@@ -177,6 +177,20 @@ def check_floor_guard(final_price, effective_floor):
     return final_price >= effective_floor
 
 
+# ==================== 보호 쿠폰 가드 (2026-07-18) ====================
+# 수동 관리 특가쿠폰(예: 알파CD)이 자동화(cleanup_group_coupons / [CIR08] 자동파기)에
+# 의해 파기되지 않도록, 그룹 config의 protected_coupon_patterns(이름 부분일치 리스트)에
+# 매칭되는 쿠폰은 파기 스킵. _is_fixed_coupon(고정 쿠폰) 과는 별개 레이어.
+def matches_protected_pattern(name, patterns):
+    """쿠폰명 name 이 protected 패턴 중 하나라도 부분일치하면 True. None 가드."""
+    if not name or not patterns:
+        return False
+    for p in patterns:
+        if p and p in name:
+            return True
+    return False
+
+
 # GMT 시간대 설정 (쿠팡 API HMAC용)
 os.environ['TZ'] = 'GMT+0'
 try:
@@ -541,8 +555,9 @@ class CoupangAPI:
         query = "type=vendorItemId"
         return self._request("GET", path, query)
     
-    def create_instant_coupon(self, vendor_item_ids, discount_amount, contract_id, 
-                               hours=None, end_date=None, title=None, discount_type="PRICE"):
+    def create_instant_coupon(self, vendor_item_ids, discount_amount, contract_id,
+                               hours=None, end_date=None, title=None, discount_type="PRICE",
+                               protected_patterns=None):
         """
         즉시할인쿠폰 생성 + 상품 연결 (전체 프로세스)
         
@@ -680,10 +695,21 @@ class CoupangAPI:
                             conflict_coupon_id = int(match.group(1))
                             conflict_vid = fi.get('vendorItemId')
                             print(f"[COUPON] CIR08 conflict: vendorItem {conflict_vid} blocked by coupon {conflict_coupon_id}")
-                            
+
+                            # 보호 쿠폰(수동관리 특가 등) 이면 자동파기 금지 — _is_fixed 와 별개 레이어
+                            if self._is_protected_coupon(conflict_coupon_id, protected_patterns):
+                                print(f"[COUPON] Conflict coupon {conflict_coupon_id} is PROTECTED - skip destroy")
+                                result['items_added'] = False
+                                result['blocked_by_protected'] = {
+                                    'coupon_id': conflict_coupon_id,
+                                    'vendor_item_id': conflict_vid,
+                                    'reason': reason
+                                }
+                                continue
+
                             # 충돌 쿠폰이 고정 쿠폰인지 확인
                             is_fixed = self._is_fixed_coupon(conflict_coupon_id)
-                            
+
                             if is_fixed:
                                 print(f"[COUPON] Conflict coupon {conflict_coupon_id} is FIXED - cannot auto-resolve")
                                 result['items_added'] = False
@@ -776,7 +802,30 @@ class CoupangAPI:
         
         print(f"[FIXED_CHECK] {coupon_id} not found in coupon list → NOT fixed")
         return False
-    
+
+    def _is_protected_coupon(self, coupon_id, patterns):
+        """충돌 쿠폰이 protected 패턴에 매칭되는 수동관리 특가쿠폰인지 확인.
+        [CIR08] 자동파기 경로에서 파기 전 방어용. 매칭 시 True → 파기 금지."""
+        if not patterns:
+            return False
+        coupons_result = self.get_coupons("APPLIED")
+        if not coupons_result.get('success'):
+            return False
+        coupon_data = coupons_result.get('data', {})
+        coupon_list = []
+        if isinstance(coupon_data, dict):
+            inner = coupon_data.get('data', {})
+            if isinstance(inner, dict):
+                coupon_list = inner.get('content', [])
+        for c in coupon_list:
+            if c.get('couponId') == coupon_id:
+                name = c.get('promotionName', '')
+                if matches_protected_pattern(name, patterns):
+                    print(f"[PROTECTED_CHECK] {coupon_id} '{name}' → protected pattern match → PROTECTED (skip destroy)")
+                    return True
+                return False
+        return False
+
     def add_coupon_items(self, coupon_id, vendor_item_ids):
         """기존 쿠폰에 상품 추가 (v1 API) - 비동기 상태 확인 포함"""
         # v1 엔드포인트: POST /coupons/{couponId}/items
@@ -2436,20 +2485,22 @@ def sync_group_prices(group_key):
 
 # ==================== 쿠폰 정리 ====================
 
-def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
+def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None, protected_patterns=None):
     """해당 그룹의 기존 쿠폰을 전부 파기 (고정 쿠폰 + 보호 쿠폰 제외)
-    
+
     쿠폰 이름에 coupon_name이 포함된 것만 찾아서 파기.
     고정 쿠폰(여러 상품 범용)과 보호 대상(증량판 등)은 파기하지 않음.
+    protected_patterns: 그룹 config의 수동관리 특가쿠폰 이름 패턴. 매칭 시 파기 스킵.
     """
     if fixed_keywords is None:
         fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
-    
+
     # 보호 키워드 - 이것이 포함되면 절대 파기하지 않음
     protected_keywords = ['증량판', '증량']
-    
+
     cancelled = []
     blocked = []
+    protected = []
     
     coupons_result = api.get_coupons("APPLIED")
     if not coupons_result.get('success'):
@@ -2477,7 +2528,13 @@ def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
         if any(pk in promo_name for pk in protected_keywords):
             print(f"[CLEANUP] PROTECTED (증량판 등): {promo_name} (ID: {coupon_id})")
             continue
-        
+
+        # 그룹 config protected_coupon_patterns 매칭 = 수동관리 특가쿠폰 → 파기 스킵
+        if matches_protected_pattern(promo_name, protected_patterns):
+            print(f"[CLEANUP] PROTECTED (특가패턴): {promo_name} (ID: {coupon_id})")
+            protected.append({'coupon_id': coupon_id, 'name': promo_name})
+            continue
+
         # 이 그룹의 쿠폰인지 확인: coupon_name 전체가 promo_name에 포함되어야 매칭
         is_group_coupon = False
         if coupon_name and coupon_name in promo_name:
@@ -2500,8 +2557,8 @@ def cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords=None):
             cancelled.append({'coupon_id': coupon_id, 'name': promo_name})
         else:
             print(f"[CLEANUP] Failed to cancel {coupon_id}: {cancel_result}")
-    
-    return {'cancelled': cancelled, 'blocked': blocked}
+
+    return {'cancelled': cancelled, 'blocked': blocked, 'protected': protected}
 
 
 @app.route('/api/product-groups/<group_key>/cleanup-coupons', methods=['POST'])
@@ -2519,9 +2576,10 @@ def cleanup_coupons_api(group_key):
     group_name = group.get('name', '')
     coupon_name = group.get('coupon_name', f"{group_name} 할인쿠폰")
     fixed_keywords = ['2천원', '3천원', '5천원', '1만원']
+    protected_patterns = group.get('protected_coupon_patterns') or []
 
     api = CoupangAPI.for_group(config, group)
-    result = cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords)
+    result = cleanup_group_coupons(api, group_name, coupon_name, fixed_keywords, protected_patterns)
     
     cancelled = result.get('cancelled', [])
     blocked = result.get('blocked', [])
@@ -2582,16 +2640,18 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
         return jsonify({"error": _msg}), 400
 
     api = CoupangAPI.for_group(config, group)
-    
+
     # ==================== 고정 쿠폰 키워드 (파기하면 안 되는 것들) ====================
     fixed_coupon_keywords = ['2천원', '3천원', '5천원', '1만원']
-    
+    # 그룹별 수동관리 특가쿠폰 보호 패턴 (예: 알파CD)
+    protected_patterns = group.get('protected_coupon_patterns') or []
+
     # ==================== 1단계: 해당 그룹의 기존 쿠폰 전부 파기 ====================
     cancelled_coupons = []
     blocked_coupons = []
-    
+
     print(f"[APPLY] Step 1: Cleanup existing coupons for group '{group_name}'")
-    cleanup = cleanup_group_coupons(api, group_name, coupon_name, fixed_coupon_keywords)
+    cleanup = cleanup_group_coupons(api, group_name, coupon_name, fixed_coupon_keywords, protected_patterns)
     cancelled_coupons = cleanup.get('cancelled', [])
     blocked_coupons = cleanup.get('blocked', [])
     
@@ -2739,7 +2799,8 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
                 discount_amount=discount_amount,
                 contract_id=contract_id,
                 hours=discount_hours,
-                title=f"{coupon_name} {multiplier}병 {discount_amount:,}원"
+                title=f"{coupon_name} {multiplier}병 {discount_amount:,}원",
+                protected_patterns=protected_patterns
             )
             
             print(f"[COUPON] Result for {product_key}: {coupon_result}")

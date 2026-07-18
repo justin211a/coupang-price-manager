@@ -169,6 +169,7 @@
 | v33.3 | 2026-03-12 | 그룹별 기존 쿠폰 자동 정리 + UI 쿠폰 정리 버튼 |
 | v33.4 | 2026-03-12 | **[CRITICAL]** 실제 판매가 기준 할인 계산 (config 정가 X) |
 | Phase A | 2026-07-18 | **[마진 하드가드]** be_floor(BQ원가 파생) 위 그룹별 `min_margin_krw`(병당 최소기여이익, 기본 0) 레버 추가. 병수 구간별 `final_price ≥ max(min_price, be_floor+min_margin×병수)` 강제, 위반 시 "손실쿠폰 차단 — 승인 필요"(알림엔 원가 수치 미표기). 순수함수 `compute_effective_floor`/`check_floor_guard` 분리·단위검증 통과. 원가는 config 아닌 BQ 유지(원가 기밀). |
+| Phase B | 2026-07-18 | **[ARTA 다계정 + 보호쿠폰 + KR3 섀도우]** ① ARTA(atv2023, vendor A01484397, contract 310615) 다계정 지원 — WING OpenAPI 키 GCS `accounts.arta`에 반영(git 평문 커밋 없음), `CoupangAPI.for_group`/`resolve_contract_id` 검증(NOVA 회귀 0, 라이브 쓰기 미실시). ② 보호쿠폰 가드 — 그룹 `protected_coupon_patterns`(이름 부분일치) 추가, `cleanup_group_coupons`·[CIR08] 자동파기에서 매칭 쿠폰 파기 스킵+로그(`_is_fixed_coupon`과 별개 레이어). ③ KR3 섀도우 — 알파CD(KAPCD)·멜라더블(KMLDB)·칼슘젤리(PRCJ) 3그룹 GCS 정본 병합(전부 enabled=false·auto_mode=false), 알파CD엔 `protected_coupon_patterns=["특가"]`. `be_floor_producer.GROUP_SKU_MAP` 매핑 추가. 단위테스트 `test_protected_coupons.py` 22/22 통과. |
 
 ---
 

@@ -1,0 +1,73 @@
+{
+  "_draft_note": "국내 쿠팡 3제품(ARTA) 온보딩 초안 — 2026-07-18. [MERGED→GCS 2026-07-18] accounts.arta + 3그룹(enabled=false, auto_mode=false 섀도우) GCS 정본 반영 완료. 이 파일은 기록용 아카이브. GCS(coupang-price-manager-config/config.json)가 정본.",
+  "_status_2026_07_18": {
+    "arta_multiaccount": "완료 — GCS accounts.arta(vendor A01484397, contract 310615) 반영. CoupangAPI.for_group/resolve_contract_id 검증 통과. 라이브 쓰기 테스트 미실시(구조·단위만).",
+    "protected_guard": "완료 — alphacd_arta.protected_coupon_patterns=['특가']. cleanup/CIR08 파기 스킵. 단위테스트 22/22 통과.",
+    "groups_merged": "완료 — GROUP_SKU_MAP(KAPCD/KMLDB/PRCJ) 추가."
+  },
+  "_remaining_blockers": [
+    "알파CD(KAPCD) product_shipping 행 없음 → be_floor SHIP-MISS. 배송비행 추가 선행(그룹 활성화 전).",
+    "멜라더블 2~6개·칼슘젤리 전옵션 실판매가(쿠폰적용가) 미상 → current_price placeholder.",
+    "min_price/max_price = BE floor 산정 후 주입(현재 null placeholder). 활성화(enabled=true) 전 필수.",
+    "실제 특가쿠폰명 미확인 → protected 패턴 '특가' 광의 매칭으로 안전측 설정. 활성화 전 실제 쿠폰명 확인 권장."
+  ],
+  "_arta_api": {
+    "vendor_id": "A01484397",
+    "contract_id": "310615",
+    "env_keys": "COUPANG_ARTA_ACCESS_KEY / _SECRET_KEY / _VENDOR_ID (clobi .env)"
+  },
+  "product_groups_draft": {
+    "alphacd_arta": {
+      "name": "알파CD 14P (ARTA)",
+      "sku": "KAPCD",
+      "enabled": false,
+      "auto_mode": false,
+      "auto_exclude_reason": "특가쿠폰 Claude 수동관리 — 자동쿠폰 영구 제외",
+      "coupon_name": "알파CD 특가쿠폰(수동)",
+      "estimated_cost": null,
+      "products": {
+        "1bottle": {"name": "1개", "vendor_item_id": 95377844007, "original_price": 15000, "current_price": 4900, "min_price": null, "max_price": null},
+        "2bottle": {"name": "2개", "vendor_item_id": 95515495930, "original_price": 30000, "current_price": 7500, "min_price": null, "max_price": null},
+        "3bottle": {"name": "3개", "vendor_item_id": 95515495925, "original_price": 45000, "current_price": 9900, "min_price": null, "max_price": null},
+        "4bottle": {"name": "4개", "vendor_item_id": 95515495923, "original_price": 60000, "current_price": 12500, "min_price": null, "max_price": null},
+        "5bottle": {"name": "5개", "vendor_item_id": 95515495932, "original_price": 75000, "current_price": 14900, "min_price": null, "max_price": null},
+        "6bottle": {"name": "6개", "vendor_item_id": 95515495924, "original_price": 90000, "current_price": 17900, "min_price": null, "max_price": null}
+      },
+      "competitors": []
+    },
+    "meladouble_arta": {
+      "name": "멜라더블 60캡슐 (ARTA)",
+      "sku": "KMLDB",
+      "enabled": false,
+      "auto_mode": false,
+      "coupon_name": "멜라더블 할인쿠폰",
+      "estimated_cost": null,
+      "products": {
+        "1bottle": {"name": "1개", "vendor_item_id": 95299660878, "original_price": 20000, "current_price": 15900, "min_price": null, "max_price": null},
+        "2bottle": {"name": "2개", "vendor_item_id": 95414651493, "original_price": 26900, "current_price": null, "min_price": null, "max_price": null},
+        "3bottle": {"name": "3개", "vendor_item_id": 95366359158, "original_price": 38900, "current_price": null, "min_price": null, "max_price": null},
+        "4bottle": {"name": "4개", "vendor_item_id": 95414651492, "original_price": 48900, "current_price": null, "min_price": null, "max_price": null},
+        "5bottle": {"name": "5개", "vendor_item_id": 95503903030, "original_price": 59900, "current_price": null, "min_price": null, "max_price": null},
+        "6bottle": {"name": "6개", "vendor_item_id": 95366359157, "original_price": 69900, "current_price": null, "min_price": null, "max_price": null}
+      },
+      "competitors": []
+    },
+    "calciumjelly_arta": {
+      "name": "프라임 키즈 칼슘젤리 (ARTA, 건기식)",
+      "sku": "PRCJ",
+      "enabled": false,
+      "auto_mode": false,
+      "coupon_name": "프라임 키즈 칼슘젤리 할인쿠폰",
+      "estimated_cost": null,
+      "products": {
+        "1bottle": {"name": "1개", "vendor_item_id": 93363605887, "original_price": 25000, "current_price": null, "min_price": null, "max_price": null},
+        "2bottle": {"name": "2개", "vendor_item_id": 95421979996, "original_price": 50000, "current_price": null, "min_price": null, "max_price": null},
+        "3bottle": {"name": "3개", "vendor_item_id": 95734393310, "original_price": 41100, "current_price": null, "min_price": null, "max_price": null},
+        "4bottle": {"name": "4개", "vendor_item_id": 95734393311, "original_price": 53000, "current_price": null, "min_price": null, "max_price": null},
+        "6bottle": {"name": "6개", "vendor_item_id": 93363605890, "original_price": 64800, "current_price": null, "min_price": null, "max_price": null},
+        "12bottle": {"name": "12개", "vendor_item_id": 93363605888, "original_price": 148800, "current_price": null, "min_price": null, "max_price": null}
+      },
+      "competitors": []
+    }
+  }
+}

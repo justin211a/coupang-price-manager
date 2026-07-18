@@ -82,6 +82,10 @@ GROUP_SKU_MAP = {
     "prime_spermidine_tera": "PRS",       # 프라임 스페르미딘(테라)
     "prime_magnesium_tera": "PRMG",       # 프라임 마그네슘(테라)
     "prime_brain_tera": "PRB",            # 프라임브레인(테라)
+    # ARTA 국내 3제품 (2026-07-18 섀도우 온보딩, enabled=false)
+    "alphacd_arta": "KAPCD",              # 알파CD 14P (ARTA)
+    "meladouble_arta": "KMLDB",           # 멜라더블 60캡슐 (ARTA)
+    "calciumjelly_arta": "PRCJ",          # 프라임 키즈 칼슘젤리 (ARTA, 건기식)
 }
 
 

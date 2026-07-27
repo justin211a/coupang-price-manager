@@ -4982,6 +4982,141 @@ if os.environ.get('K_SERVICE'):
     print("[STARTUP] 자동 스케줄러 백그라운드 스레드 시작됨 (15초 후 실행)")
 
 
+# ==================== [2026-07-27 임시] 멜라더블 팩트필드 집행용 admin 엔드포인트 ====================
+# additive only — 기존 쿠폰·가격 핸들러 무손대. 인증=기존 SECRET_KEY bearer(X-Admin-Token 헤더).
+# body-driven: GET(스키마 학습) + PATCH(서버측 GET→field-path 적용→deep-diff assert→dry_run/PUT→read-back).
+# 집행(멜라더블 spid 16040883061 팩트필드) 완료 후 제거 예정.
+import copy as _sp_copy
+import re as _sp_re
+
+def _sp_parse_path(path):
+    """'notices[3].content' / 'items[0].attributes[5].value' → ['notices',3,'content'] 토큰."""
+    tokens = []
+    for part in str(path).split('.'):
+        m = _sp_re.match(r'^([^\[\]]*)((?:\[\d+\])*)$', part)
+        if not m:
+            tokens.append(part)
+            continue
+        name, idxs = m.group(1), m.group(2)
+        if name != '':
+            tokens.append(name)
+        for i in _sp_re.findall(r'\[(\d+)\]', idxs):
+            tokens.append(int(i))
+    return tokens
+
+def _sp_get(obj, tokens):
+    cur = obj
+    for t in tokens:
+        try:
+            cur = cur[t]
+        except (KeyError, IndexError, TypeError):
+            return (False, None)
+    return (True, cur)
+
+def _sp_set(obj, tokens, value):
+    cur = obj
+    for t in tokens[:-1]:
+        cur = cur[t]
+    last = tokens[-1]
+    try:
+        old = cur[last]
+    except Exception:
+        old = None
+    cur[last] = value
+    return old
+
+def _sp_deep_diff(a, b, path=''):
+    diffs = []
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in (set(a.keys()) | set(b.keys())):
+            np = f'{path}.{k}' if path else str(k)
+            if k not in a:
+                diffs.append({'path': np, 'before': None, 'after': b[k]})
+            elif k not in b:
+                diffs.append({'path': np, 'before': a[k], 'after': None})
+            else:
+                diffs += _sp_deep_diff(a[k], b[k], np)
+    elif isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            diffs.append({'path': path + '[len]', 'before': len(a), 'after': len(b)})
+        for i in range(min(len(a), len(b))):
+            diffs += _sp_deep_diff(a[i], b[i], f'{path}[{i}]')
+    else:
+        if a != b:
+            diffs.append({'path': path, 'before': a, 'after': b})
+    return diffs
+
+def _sp_covered(patch_paths, diff_path):
+    for pp in patch_paths:
+        if diff_path == pp or diff_path.startswith(pp + '.') or diff_path.startswith(pp + '['):
+            return True
+    return False
+
+def _sp_auth_ok():
+    tok = request.headers.get('X-Admin-Token', '')
+    key = os.environ.get('SECRET_KEY') or ''
+    return bool(key) and tok == key
+
+@app.route('/api/admin/seller-product-get', methods=['POST'])
+def admin_seller_product_get():
+    if not _sp_auth_ok():
+        return jsonify({'error': 'unauthorized'}), 401
+    b = request.get_json(force=True, silent=True) or {}
+    spid = str(b.get('spid', '')).strip()
+    if not spid:
+        return jsonify({'error': 'spid required'}), 400
+    cfg = load_config()
+    api = CoupangAPI(cfg, account=b.get('account', 'arta'))
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{spid}"
+    return jsonify(api._request('GET', path))
+
+@app.route('/api/admin/seller-product-patch', methods=['POST'])
+def admin_seller_product_patch():
+    if not _sp_auth_ok():
+        return jsonify({'error': 'unauthorized'}), 401
+    b = request.get_json(force=True, silent=True) or {}
+    spid = str(b.get('spid', '')).strip()
+    patches = b.get('patches') or []
+    dry_run = b.get('dry_run', True)
+    if not spid or not patches:
+        return jsonify({'error': 'spid and patches required'}), 400
+    cfg = load_config()
+    api = CoupangAPI(cfg, account=b.get('account', 'arta'))
+    path = f"/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{spid}"
+    got = api._request('GET', path)
+    if not got.get('success'):
+        return jsonify({'stage': 'get', 'result': got}), 502
+    raw = got.get('data')
+    original = raw.get('data') if isinstance(raw, dict) and 'data' in raw else raw
+    modified = _sp_copy.deepcopy(original)
+    applied = []
+    for p in patches:
+        toks = _sp_parse_path(p.get('path'))
+        found, before = _sp_get(modified, toks)
+        try:
+            _sp_set(modified, toks, p.get('value'))
+            applied.append({'path': p.get('path'), 'found': found, 'before': before, 'after': p.get('value'), 'ok': True})
+        except Exception as e:
+            applied.append({'path': p.get('path'), 'found': found, 'before': before, 'ok': False, 'err': str(e)})
+    diffs = _sp_deep_diff(original, modified)
+    patch_paths = [p.get('path') for p in patches]
+    off_target = [d for d in diffs if not _sp_covered(patch_paths, d['path'])]
+    _FORBIDDEN = ('saleprice', 'price', 'stock', 'quantity', 'salestatus', 'itemsalestatus',
+                  'vendoritemid', 'itemname', 'sellerproductname', 'image')
+    forbidden_hit = [d for d in diffs if any(f in d['path'].lower() for f in _FORBIDDEN)]
+    assert_ok = (len(off_target) == 0 and len(forbidden_hit) == 0 and all(a['ok'] for a in applied))
+    resp = {'spid': spid, 'account': b.get('account', 'arta'), 'dry_run': bool(dry_run),
+            'applied': applied, 'diff_count': len(diffs), 'diffs': diffs[:300],
+            'off_target': off_target, 'forbidden_hit': forbidden_hit, 'assert_ok': assert_ok}
+    if dry_run or not assert_ok:
+        resp['put'] = 'skipped'
+        return jsonify(resp)
+    resp['put_result'] = api._request('PUT', path, data=modified)
+    resp['readback'] = api._request('GET', path)
+    return jsonify(resp)
+# ==================== [끝] 멜라더블 팩트필드 admin 엔드포인트 ====================
+
+
 # ==================== 메인 ====================
 
 if __name__ == "__main__":

@@ -5111,7 +5111,8 @@ def admin_seller_product_patch():
     if dry_run or not assert_ok:
         resp['put'] = 'skipped'
         return jsonify(resp)
-    resp['put_result'] = api._request('PUT', path, data=modified)
+    put_path = b.get('put_path') or '/v2/providers/seller_api/apis/api/v1/marketplace/seller-products'
+    resp['put_result'] = api._request('PUT', put_path, data=modified)
     resp['readback'] = api._request('GET', path)
     return jsonify(resp)
 # ==================== [끝] 멜라더블 팩트필드 admin 엔드포인트 ====================

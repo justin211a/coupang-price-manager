@@ -224,7 +224,7 @@ function renderGroupSettings() {
                     <div><label class="text-gray-400 text-sm mb-1 block">3병 추가할인 (%)</label><input type="number" value="${g.pack3_extra_discount || 0}" onchange="updateSetting('pack3_extra_discount', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"></div>
                     <div><label class="text-gray-400 text-sm mb-1 block">6병 추가할인 (%)</label><input type="number" value="${g.pack6_extra_discount || 0}" onchange="updateSetting('pack6_extra_discount', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"></div>
                 </div>
-                <div><label class="text-gray-400 text-sm mb-1 block">💰 추정 원가 (1병)</label><input type="number" value="${g.estimated_cost || 0}" onchange="updateSetting('estimated_cost', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"><p class="text-xs text-gray-500 mt-1">AI 마진 분석에 사용</p></div>
+                <div><label class="text-gray-400 text-sm mb-1 block">💰 추정 원가 (1병)</label><input type="number" value="${g.estimated_cost || 0}" onchange="updateSetting('estimated_cost', parseInt(this.value))" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-right"><p class="text-xs text-gray-500 mt-1">AI 마진 분석 전용 · 쿠폰 발행/보류와 무관</p></div>
             </div>
             <div class="bg-gray-700/50 rounded-xl p-4">
                 <div class="flex justify-between items-center mb-3">

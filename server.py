@@ -64,8 +64,8 @@ GCS_CONFIG_PATH = 'config.json'
 GCS_HISTORY_PATH = 'price_history.json'
 
 # 버전 정보
-APP_VERSION = "33.12"
-BUILD_DATE = "2026-06-08"
+APP_VERSION = "33.13"
+BUILD_DATE = "2026-07-30"
 
 # 한국 시간대 (UTC+9)
 KST = timezone(timedelta(hours=9))
@@ -313,7 +313,33 @@ def load_config():
 
 
 def save_config(config):
-    """설정 파일 저장 (GCS + 로컬 둘 다)"""
+    """설정 파일 저장 (GCS + 로컬 둘 다).
+
+    ★ be_floor 보존(lost-update 방지, 2026-07-30) ★
+    be_floor_map/be_floor_updated 는 클로비 배치(be_floor_producer)가 GCS 에만 심는
+    producer-owned 키다. 서비스는 이 값을 읽기만 하고(get_be_floor_status) 절대 계산/수정하지
+    않는다. 그런데 auto-check 등은 config 를 시작 시점에 load 한 뒤 수 분간 크롤/발행을 돌리고
+    루프마다 save_config(config) 를 부른다 → 그 사이 producer 가 GCS 에 새 be_floor 를 심어도
+    서비스가 '로드 당시의 낡은 be_floor' 로 통째로 덮어써 되돌린다(11일간 stale HOLD 재발 원인).
+    저장 직전 현재 GCS 의 be_floor 를 다시 읽어 overlay 함으로써 producer 값이 클로버되지
+    않게 한다. (be_floor 외 키는 그대로 저장 — 서비스 정상 동작 불변.)"""
+    if HAS_GCS:
+        try:
+            cur = load_from_gcs(GCS_CONFIG_PATH)
+            if isinstance(cur, dict):
+                cur_groups = cur.get('product_groups', {})
+                for gk, g in config.get('product_groups', {}).items():
+                    if not isinstance(g, dict):
+                        continue
+                    cg = cur_groups.get(gk)
+                    if isinstance(cg, dict):
+                        if 'be_floor_map' in cg:
+                            g['be_floor_map'] = cg['be_floor_map']
+                        if 'be_floor_updated' in cg:
+                            g['be_floor_updated'] = cg['be_floor_updated']
+        except Exception as e:
+            print(f"[Config] be_floor 보존 병합 스킵(비차단): {e}")
+
     # 1. 로컬 저장 (백업)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
@@ -2706,7 +2732,7 @@ def _apply_group_prices_core(group_key, silent_jandi=False):
                 "product": product.get('name', product_key),
                 "success": False,
                 "hold": True,
-                "error": f"HOLD: 원가바닥(be_floor) 미확보 — {be_status['reason']}"
+                "error": f"보류: 자동 손익바닥 산출 지연 — 운영자 확인 필요 (이 화면의 '추정 원가' 입력과 무관). [{be_status['reason']}]"
             })
             continue
         # 하한 = max(min_price, be_floor + 최소마진). 이후 모든 하한 판정에 effective_floor 사용.
@@ -4197,7 +4223,13 @@ def generate_ai_insight(group_key):
         return jsonify({"error": "가격 정보가 없습니다. 먼저 쿠팡 가격을 동기화해주세요."}), 400
     
     # 원가 추정 (정가의 50~55% 가정, 실제로는 config에서 받아야 함)
-    cost = group.get('estimated_cost', int(original_price * 0.5)) if original_price > 0 else int(current_price * 0.55)
+    # None 가드(글로벌 룰): estimated_cost 가 명시적 None(공란 저장)이면 dict.get(k, default) 는
+    # default 가 아니라 None 을 반환 → 아래 current_price - cost / cost > 0 에서 TypeError.
+    # 키 누락뿐 아니라 명시 None 도 추정치로 대체한다.
+    est = group.get('estimated_cost')
+    if est is None:
+        est = int(original_price * 0.5) if original_price > 0 else int(current_price * 0.55)
+    cost = est
     
     # BigQuery에서 판매 데이터 조회 시도
     sales_data = []
